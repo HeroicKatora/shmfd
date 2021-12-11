@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "shm-watch",
+  "shm-fd",
   "shm-state",
   "examples/primes"
 ]

@@ -13,6 +13,6 @@ When no more values are to be generated then it prints the full table.
 It's easily executed in a loop with `watch`.
 
 ```
-cargo build --release -p shm-watch -p primes
-./target/release/shm-watch watch -n 0.1 ./target/release/primes
+cargo build --release -p shm-fd -p primes
+./target/release/shm-fd watch -n 0.1 ./target/release/primes
 ```

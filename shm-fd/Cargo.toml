@@ -1,5 +1,5 @@
 [package]
-name = "shm-watch"
+name = "shm-fd"
 version = "0.1.0"
 edition = "2021"
 
