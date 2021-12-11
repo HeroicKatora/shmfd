@@ -6,3 +6,7 @@ publish = false
 
 [dependencies.shm-state]
 path = "../../shm-state"
+[dependencies.bytemuck]
+version = "1.7"
+[dependencies.memmap2]
+version = "0.5"
