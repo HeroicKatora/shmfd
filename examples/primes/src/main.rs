@@ -67,8 +67,7 @@ fn run_main_routine(values: &mut [u64]) {
         break;
     }
 
-    eprintln!("generated {} more primes, done", CHUNK);
-    // eprintln!("{:?}", &values[pos..end]);
+    eprintln!("generated {} more primes, total {}", CHUNK, end);
 }
 
 fn check_prime(num: u64, primes: &[u64]) -> bool {
