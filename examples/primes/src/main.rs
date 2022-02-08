@@ -1,5 +1,5 @@
 use std::os::unix::io::AsRawFd;
-use shm_state::SharedFd;
+use shm_fd::SharedFd;
 use memmap2::MmapMut;
 
 fn main() {

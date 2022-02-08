@@ -4,8 +4,8 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
-[dependencies.shm-state]
-path = "../../shm-state"
+[dependencies.shm-fd]
+path = "../../shm-fd"
 [dependencies.bytemuck]
 version = "1.7"
 [dependencies.memmap2]
