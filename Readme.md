@@ -40,3 +40,12 @@ cargo build --release -p shm-fd -p shm-restore -p primes
 ./target/release/shm-fd ./target/release/shm-restore ./target/prime-snapshot ./target/release/primes
 hexdump ./target/prime-shapshot
 ```
+
+Or, to test the Strg+C (SIGINT) way of interrupting:
+
+```bash
+cargo build --release -p shm-fd -p shm-restore -p primes
+./target/release/shm-fd ./target/release/shm-restore ./target/prime-snapshot watch -n 0.1 ./target/release/primes
+^C
+hexdump ./target/prime-shapshot
+```

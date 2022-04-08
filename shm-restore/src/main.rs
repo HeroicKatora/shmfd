@@ -104,6 +104,7 @@ unsafe fn posixly_ignore_signals() {
     action.sa_sigaction = (|_, _, _| ()) as Sigaction as usize;
 
     libc::sigaction(libc::SIGTERM, &mut action as *mut _, core::ptr::null_mut());
+    libc::sigaction(libc::SIGINT, &mut action as *mut _, core::ptr::null_mut());
     libc::sigaction(libc::SIGCHLD, &mut action as *mut _, core::ptr::null_mut());
 }
 
