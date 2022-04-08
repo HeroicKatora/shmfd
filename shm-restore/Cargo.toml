@@ -3,6 +3,7 @@ name = "shm-restore"
 version = "1.0.0-alpha"
 edition = "2021"
 
-[dependencies]
-libc = "0.2.109"
-shm-fd = { version = "0.1.0", path = "../shm-fd" }
+[dependencies.libc]
+version = "0.2.109"
+[dependencies.shm-fd]
+path = "../shm-fd"
