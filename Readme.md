@@ -12,17 +12,10 @@ generates at most 1000 values each execution, filling up a share memory file of
 
 It's easily executed in a loop with `watch`.
 
-```
+```bash
 cargo build --release -p shm-fd -p primes
 ./target/release/shm-fd watch -n 0.1 ./target/release/primes
 ```
-
-## shm-restore
-
-Lightweight Checkpoint and Restore for shm-fd programs. Writes `shm-fd` data to
-a backing file and restores such data before running the actual program. In
-particular catches `SIGTERM`. This allows it to persist data transparently
-across system restarts.
 
 ## shm-state
 
@@ -31,3 +24,19 @@ Work-In-Progress.
 Additional utilities on-top of the share file descriptor concepts. In
 particular, some semantic helper structures that help achieve hot-reloading,
 state migration, or similar high-level goals.
+
+## shm-restore
+
+Lightweight Checkpoint and Restore for shm-fd programs. Writes `shm-fd` data to
+a backing file and restores such data before running the actual program. In
+particular catches `SIGTERM`. This allows it to persist data transparently
+across (system) restarts.
+
+Example:
+
+```bash
+cargo build --release -p shm-fd -p shm-restore -p primes
+./target/release/shm-fd ./target/release/shm-restore ./target/prime-snapshot ./target/release/primes
+./target/release/shm-fd ./target/release/shm-restore ./target/prime-snapshot ./target/release/primes
+hexdump ./target/prime-shapshot
+```
