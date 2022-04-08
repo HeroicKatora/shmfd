@@ -1,13 +1,12 @@
-use std::process::Command;
-use std::os::unix::{io::AsRawFd, process::CommandExt};
 use memfile::MemFile;
+use std::os::unix::{io::AsRawFd, process::CommandExt};
+use std::process::Command;
 
 fn main() {
-    let file = MemFile::create_sealable("persistent")
-        .expect("failed to initialized shm-file");
+    let file = MemFile::create_sealable("persistent").expect("failed to initialized shm-file");
     // Just reserve a file descriptor...
-    let placeholder = MemFile::create_default("placeholder")
-        .expect("failed to initialized shm-file");
+    let placeholder =
+        MemFile::create_default("placeholder").expect("failed to initialized shm-file");
     let rawfd = file.as_raw_fd();
     let target = placeholder.as_raw_fd();
 

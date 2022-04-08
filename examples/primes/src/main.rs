@@ -1,6 +1,6 @@
-use std::os::unix::io::AsRawFd;
-use shm_fd::SharedFd;
 use memmap2::MmapMut;
+use shm_fd::SharedFd;
+use std::os::unix::io::AsRawFd;
 
 fn main() {
     let file;
@@ -8,11 +8,9 @@ fn main() {
     let memory;
 
     if let Some(fd) = unsafe { SharedFd::from_env() } {
-        file = fd.into_file()
-            .expect("opening shared fd failed");
+        file = fd.into_file().expect("opening shared fd failed");
         let _ = file.set_len(1_000_000u64);
-        mapping = unsafe { MmapMut::map_mut(file.as_raw_fd()) }
-            .expect("memmap failed");
+        mapping = unsafe { MmapMut::map_mut(file.as_raw_fd()) }.expect("memmap failed");
         memory = &mut mapping[..];
     } else {
         panic!("No shared memory state found");
@@ -39,7 +37,7 @@ fn run_main_routine(values: &mut [u64]) {
         .expect("at least one prime");
     // The position to insert a new prime.
     let pos = pos + 1;
-    let end = (pos+CHUNK).min(values.len());
+    let end = (pos + CHUNK).min(values.len());
     // The first number above the new prime to check.
     let mut num = num + 1;
 

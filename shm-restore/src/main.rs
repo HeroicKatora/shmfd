@@ -53,7 +53,9 @@ struct WriteBack {
     bck: RawFd,
 }
 
-unsafe fn writeback_protector(WriteBack { shm, bck }: WriteBack) -> Result<impl Drop, std::io::Error> {
+unsafe fn writeback_protector(
+    WriteBack { shm, bck }: WriteBack,
+) -> Result<impl Drop, std::io::Error> {
     /* First copy existing data to the shared memory.
      * We choose this to discover what is supported.
      */
@@ -65,15 +67,24 @@ unsafe fn writeback_protector(WriteBack { shm, bck }: WriteBack) -> Result<impl 
 
             // TODO: should we care about this failing?
             libc::ftruncate(dest, length);
-            libc::copy_file_range(source, &mut off_source, dest, &mut off_dest, length as usize, 0)
+            libc::copy_file_range(
+                source,
+                &mut off_source,
+                dest,
+                &mut off_dest,
+                length as usize,
+                0,
+            )
         }
     }
 
     let how: fn(RawFd, RawFd) = match copy_file_range(bck, shm) {
-        diff if matches!(diff as libc::c_int, libc::EXDEV | libc::EFBIG) => todo!("Fallback to normal copy"),
+        diff if matches!(diff as libc::c_int, libc::EXDEV | libc::EFBIG) => {
+            todo!("Fallback to normal copy")
+        }
         diff if diff < 0 => return Err(std::io::Error::last_os_error()),
-        _ => {
-            |source, dest| { copy_file_range(source, dest); }
+        _ => |source, dest| {
+            copy_file_range(source, dest);
         },
     };
 

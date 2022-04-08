@@ -14,8 +14,8 @@ impl SharedFd {
     pub unsafe fn from_env() -> Option<Self> {
         let var = std::env::var_os("SHM_SHARED_FDS")?;
         let num = var.to_str()?.split(',').next()?;
-        let fd: i32 = num.parse().ok()?;
-        Some(SharedFd { fd: RawFd::from(fd) })
+        let fd: RawFd = num.parse().ok()?;
+        Some(SharedFd { fd })
     }
 
     /// Open the file descriptor.

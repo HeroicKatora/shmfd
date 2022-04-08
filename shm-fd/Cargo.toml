@@ -8,7 +8,7 @@ description = "Like systemfd/listenfd but with a shared-memory file descriptor"
 repository = "https://github.com/HeroicKatora/shmfd"
 license = "MPL-2.0"
 readme = "Readme.md"
-keywords = ["shm", "shared", "memory", "systemfd", "listenfd", "shmfd"]
+keywords = ["shm", "shared-memory", "systemfd", "listenfd", "shmfd"]
 categories = ["memory-management", "os::unix-apis"]
 
 [lib]
