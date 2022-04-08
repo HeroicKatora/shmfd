@@ -3,5 +3,9 @@ name = "shm-state"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-memfile = "0.2.1"
+[dependencies.shm-fd]
+path = "../shm-fd"
+version = "0.1.0"
+
+[dependencies.memfile]
+version = "0.2.1"

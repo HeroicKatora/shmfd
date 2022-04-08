@@ -1,4 +1,4 @@
-use memfile::{MemFile};
+use memfile::MemFile;
 use std::os::unix::io::RawFd;
 
 pub struct SharedFd {
@@ -26,5 +26,11 @@ impl SharedFd {
         // It's not necessary to preserve the file descriptor here.
         // It can be restored in any case.
         MemFile::from_file(self.fd).map_err(|err| err.into_error())
+    }
+}
+
+impl std::os::unix::io::AsRawFd for SharedFd {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd
     }
 }

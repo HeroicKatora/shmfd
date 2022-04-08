@@ -2,5 +2,6 @@
 members = [
   "shm-fd",
   "shm-state",
+  "shm-restore",
   "examples/primes"
 ]
