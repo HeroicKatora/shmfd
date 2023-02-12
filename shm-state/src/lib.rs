@@ -1,4 +1,7 @@
-use std::os::unix::io::RawFd;
+#![no_std]
+mod mmap;
+mod ring;
 
-use memfile::MemFile;
-use shm_fd::SharedFd;
+extern crate alloc;
+
+pub use mmap::{Mapper, MapError, VTable};

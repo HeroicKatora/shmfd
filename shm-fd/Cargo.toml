@@ -20,4 +20,6 @@ name = "shm-fd"
 
 [dependencies]
 libc = "0.2.109"
-memfile = "0.2.1"
+[dependencies.memfile]
+version = "0.2.1"
+optional = true

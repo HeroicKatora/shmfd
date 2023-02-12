@@ -3,6 +3,9 @@ name = "shm-state"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies.libc]
+version = "0.2.139"
+optional = true
 [dependencies.shm-fd]
 path = "../shm-fd"
 version = "0.2.0"

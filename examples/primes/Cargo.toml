@@ -6,6 +6,7 @@ publish = false
 
 [dependencies.shm-fd]
 path = "../../shm-fd"
+features = ["memfile"]
 [dependencies.bytemuck]
 version = "1.7"
 [dependencies.memmap2]
