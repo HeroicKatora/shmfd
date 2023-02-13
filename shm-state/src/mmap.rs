@@ -71,7 +71,27 @@ impl Mapper {
             return Err(MapError((self.inner.vtable.errno)()));
         }
 
-        todo!()
+        assert!((ptr as usize) % 4 == 0, "Unaligned mmap address chosen");
+        let count = len / 4;
+
+        // Safety:
+        // * mmap returns valid memory
+        // * memory _may_ be aliased, which is why we have atomics (external interior mutability).
+        //   This is the best we can do and probably reasonable across processes.
+        // * checked alignment requirement above.
+        // * the mapping is leaked initially, i.e. has `'static` lifetime.
+        Ok(unsafe { &*core::ptr::slice_from_raw_parts(ptr as *const AtomicU32, count) })
+    }
+
+    /// Deallocate a mapping created with `mmap_shared`.
+    ///
+    /// # Safety
+    ///
+    /// The memory denoted by `region` must not be aliased by any live reference. The same length
+    /// must be passed that was used to map the region. It must be the same parameter as used in
+    /// the `mmap_shared` call that previously returned the valid region.
+    pub unsafe fn munmap(&self, region: *const [AtomicU32], len: usize) {
+        (self.inner.vtable.munmap)(region as *mut _, len);
     }
 }
 
