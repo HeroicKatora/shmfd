@@ -18,7 +18,7 @@ pub struct Mapper {
     inner: Arc<Inner>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MapError(pub(crate) c_int);
 
 struct Inner {

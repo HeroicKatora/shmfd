@@ -1,6 +1,5 @@
 use crate::{area::AreaFd, MapError, Mapper};
 use core::sync::atomic::{AtomicU32, Ordering};
-use shm_fd::{SharedFd, Shm};
 
 /// A transaction descriptor  ring-based abstraction.
 ///
@@ -23,8 +22,13 @@ use shm_fd::{SharedFd, Shm};
 /// 3. checking that the descriptor is still in the same state as it was found in.
 /// 4. replacing its current backup with the new backup.
 pub struct Ring {
+    mapped: RingMapped,
     inner: AreaFd,
     mapper: Mapper,
+}
+
+/// Controller over a shared memory region.
+struct RingMapped {
     /// The inner mmap'd region. It is important that we do not return any reference to it, i.e. we
     /// own this region with this pointer and need to do so on `Drop`.
     mapping: &'static [AtomicU32],
@@ -38,12 +42,14 @@ pub struct RingOptions {
     pub nr_descriptors: u32,
 }
 
+#[derive(Clone, Copy)]
 struct Layout {
     index_descriptors: usize,
     index_descriptors_mask: u32,
 }
 
 /// User-facing descriptor parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Descriptor {
     pub payload: u64,
     pub start: u64,
@@ -76,19 +82,76 @@ struct DescriptorInner {
 
 impl Ring {
     pub fn new(mapper: Mapper, area: AreaFd, options: &RingOptions) -> Result<Self, MapError> {
-        let layout = Self::layout_for(area.len(), options)?;
+        let layout = RingMapped::layout_for(area.len(), options)?;
         let mapping = mapper.mmap_shared(area.fd.as_raw_fd(), area.len())?;
 
         Ok(Ring {
             inner: area,
             mapper,
-            mapping,
-            position: 0,
-            layout,
+            mapped: RingMapped {
+                mapping,
+                position: 0,
+                layout,
+            },
         })
     }
 
-    pub fn push(&self, descriptor: Descriptor) {
+    /// Set the position to the most recent descriptor.
+    ///
+    /// Returns this descriptor on success. This is the main restore entry point.
+    pub fn restore(&mut self) -> Option<Descriptor> {
+        self.mapped.restore()
+    }
+
+    pub fn push(&mut self, descriptor: Descriptor) {
+        self.mapped.push(descriptor)
+    }
+}
+
+impl RingMapped {
+    /// Set the position to the most recent descriptor.
+    ///
+    /// Returns this descriptor on success. This is the main restore entry point.
+    pub fn restore(&mut self) -> Option<Descriptor> {
+        fn recombine_u64(atomics: &[AtomicU32; 2]) -> u64 {
+            let base = atomics[0].load(Ordering::Acquire);
+            let top = atomics[1].load(Ordering::Acquire);
+            u64::from(top) << 32 | u64::from(base)
+        }
+
+        // An _inactive_ descriptor as baseline.
+        let mut max_ts = 0;
+        let mut max_desc = None;
+
+        for index in 0..=self.layout.index_descriptors_mask {
+            let target = &self.descriptors()[index as usize];
+            let ts = recombine_u64(&target.mark);
+
+            // Only active descriptors are considered.
+            if ts & 0x1 == 0 {
+                continue;
+            }
+
+            if max_ts < ts {
+                self.position = index;
+                max_ts = ts;
+            }
+        }
+
+        if max_ts > 0 {
+            let target = &self.descriptors()[self.position as usize];
+
+            max_desc = Some(Descriptor {
+                payload: recombine_u64(&target.payload),
+                start: recombine_u64(&target.start),
+                end: recombine_u64(&target.end),
+            });
+        }
+
+        max_desc
+    }
+
+    pub fn push(&mut self, descriptor: Descriptor) {
         fn split_u64(v: u64) -> [AtomicU32; 2] {
             [v as u32, (v >> 32) as u32].map(AtomicU32::new)
         }
@@ -127,6 +190,9 @@ impl Ring {
 
         // Ensure the sequencing with regards to buffer modification.
         target.mark[0].store(new_mark | 1, Ordering::Release);
+
+        // Next descriptor will be written at next position.
+        self.position = self.position.wrapping_add(1);
     }
 
     fn descriptors(&self) -> &[DescriptorInner] {
@@ -169,8 +235,41 @@ impl Ring {
 
 impl Drop for Ring {
     fn drop(&mut self) {
-        let mmap = core::mem::take(&mut self.mapping);
+        let mmap = core::mem::take(&mut self.mapped.mapping);
         // Safety: no more references to this region of memory.
         unsafe { self.mapper.munmap(mmap, self.inner.len()) };
     }
+}
+
+#[test]
+fn primitive_ring_ops() {
+    const INIT: AtomicU32 = AtomicU32::new(0);
+    static REGION: [AtomicU32; 1 << 10] = [INIT; 1 << 10];
+
+    let layout = RingMapped::layout_for(REGION.len(), &RingOptions { nr_descriptors: 16 }).unwrap();
+
+    let desc = Descriptor {
+        start: 0,
+        end: 0xabab,
+        payload: 0xdead_beef,
+    };
+
+    let mut ring = RingMapped {
+        mapping: &REGION,
+        position: 0,
+        layout,
+    };
+
+    ring.push(desc);
+
+    drop(ring);
+
+    let mut ring = RingMapped {
+        mapping: &REGION,
+        position: 0,
+        layout,
+    };
+
+    let found = ring.restore();
+    assert_eq!(found, Some(desc));
 }
