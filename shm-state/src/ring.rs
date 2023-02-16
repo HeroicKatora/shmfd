@@ -1,4 +1,5 @@
-use crate::{area::AreaFd, MapError, Mapper};
+use crate::area::{AreaFd, MappedFd};
+use crate::{MapError, Mapper};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 /// A transaction descriptor  ring-based abstraction.
@@ -23,16 +24,17 @@ use core::sync::atomic::{AtomicU32, Ordering};
 /// 4. replacing its current backup with the new backup.
 pub struct Ring {
     mapped: RingMapped,
-    inner: AreaFd,
-    mapper: Mapper,
+    /// The mapfd is dropped after the copy of `mapping` in the other field.
+    mapfd: MappedFd,
 }
 
 /// Controller over a shared memory region.
-struct RingMapped {
+pub(crate) struct RingMapped {
     /// The inner mmap'd region. It is important that we do not return any reference to it, i.e. we
     /// own this region with this pointer and need to do so on `Drop`.
     mapping: &'static [AtomicU32],
     position: u32,
+    generation: u32,
     layout: Layout,
 }
 
@@ -46,6 +48,7 @@ pub struct RingOptions {
 struct Layout {
     index_descriptors: usize,
     index_descriptors_mask: u32,
+    tail: usize,
 }
 
 /// User-facing descriptor parameter.
@@ -54,17 +57,6 @@ pub struct Descriptor {
     pub payload: u64,
     pub start: u64,
     pub end: u64,
-}
-
-#[repr(C)]
-struct Header {
-    magic: [u32; 4],
-    options: u32,
-    count: u32,
-}
-
-struct Producer {
-    head: AtomicU32,
 }
 
 /// Do not change without checking `Ring::descriptors`.
@@ -80,19 +72,30 @@ struct DescriptorInner {
     end: [AtomicU32; 2],
 }
 
+/// The index of a descriptor.
+///
+/// Always 'valid', the specific ring will mask the index before use. However, you should only use
+/// the index to invalidate entries in the ring that created it.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct DescriptorIdx(pub u32);
+
 impl Ring {
     pub fn new(mapper: Mapper, area: AreaFd, options: &RingOptions) -> Result<Self, MapError> {
         let layout = RingMapped::layout_for(area.len(), options)?;
-        let mapping = mapper.mmap_shared(area.fd.as_raw_fd(), area.len())?;
+        let mapfd = MappedFd::new(mapper, area)?;
+
+        // Safety: field is not moved from or dropped while the mapping in the other field is used,
+        // and that mapping is never passed around further.
+        let mapping = unsafe { mapfd.get_unchecked() };
 
         Ok(Ring {
-            inner: area,
-            mapper,
             mapped: RingMapped {
                 mapping,
                 position: 0,
+                generation: 0,
                 layout,
             },
+            mapfd,
         })
     }
 
@@ -104,11 +107,29 @@ impl Ring {
     }
 
     pub fn push(&mut self, descriptor: Descriptor) {
-        self.mapped.push(descriptor)
+        self.mapped.push(descriptor);
+    }
+
+    pub fn invalidate(&mut self, idx: DescriptorIdx) -> bool {
+        self.mapped.invalidate(idx)
+    }
+
+    pub(crate) unsafe fn into_parts(self) -> (RingMapped, MappedFd) {
+        (self.mapped, self.mapfd)
     }
 }
 
 impl RingMapped {
+    pub(crate) fn wrap(mapping: &'static [AtomicU32], opt: &RingOptions) -> Result<Self, MapError> {
+        let layout = Self::layout_for(core::mem::size_of_val(mapping), opt)?;
+        Ok(RingMapped {
+            mapping,
+            layout,
+            position: 0,
+            generation: 0,
+        })
+    }
+
     /// Set the position to the most recent descriptor.
     ///
     /// Returns this descriptor on success. This is the main restore entry point.
@@ -139,6 +160,7 @@ impl RingMapped {
         }
 
         if max_ts > 0 {
+            self.generation = (max_ts >> 32) as u32;
             let target = &self.descriptors()[self.position as usize];
 
             max_desc = Some(Descriptor {
@@ -151,26 +173,17 @@ impl RingMapped {
         max_desc
     }
 
-    pub fn push(&mut self, descriptor: Descriptor) {
+    pub fn push(&mut self, descriptor: Descriptor) -> DescriptorIdx {
         fn split_u64(v: u64) -> [AtomicU32; 2] {
             [v as u32, (v >> 32) as u32].map(AtomicU32::new)
         }
 
+        let (_, new_mark) = self.invalidate_inner(DescriptorIdx(self.position));
         let index = self.position & self.layout.index_descriptors_mask;
         let target = &self.descriptors()[index as usize];
 
-        let old_mark = target.mark[0].load(Ordering::Relaxed);
-        // Maybe we add _two_ here, if the mark is still in 'used' state.
-        // But surely the lowest bit is unset afterwards and old_mark < new_mark (in a wrapping
-        // sense of this relation). This marks the buffer as owned by the producer.
-        let new_mark = (old_mark | 1).wrapping_add(1);
-        // Ensure the sequencing with regards to buffer modification.
-        target.mark[0].store(new_mark, Ordering::Release);
-        core::sync::atomic::fence(Ordering::Acquire);
-        core::sync::atomic::compiler_fence(Ordering::Acquire);
-
         let inner = DescriptorInner {
-            mark: [AtomicU32::new(new_mark), AtomicU32::new(0)],
+            mark: [AtomicU32::new(new_mark), AtomicU32::new(self.generation)],
             payload: split_u64(descriptor.payload),
             start: split_u64(descriptor.start),
             end: split_u64(descriptor.end),
@@ -192,7 +205,37 @@ impl RingMapped {
         target.mark[0].store(new_mark | 1, Ordering::Release);
 
         // Next descriptor will be written at next position.
+        let buf_idx = DescriptorIdx(self.position);
         self.position = self.position.wrapping_add(1);
+        buf_idx
+    }
+
+    /// Mark a descriptor as no longer valid.
+    ///
+    /// Returns if the descriptor was marked valid before.
+    pub fn invalidate(&mut self, idx: DescriptorIdx) -> bool {
+        let (old, _) = self.invalidate_inner(idx);
+        old & 0x1 != 0
+    }
+
+    fn invalidate_inner(&mut self, idx: DescriptorIdx) -> (u32, u32) {
+        let index = idx.0 & self.layout.index_descriptors_mask;
+        let target = &self.descriptors()[index as usize];
+
+        let old_mark = target.mark[0].load(Ordering::Acquire);
+        // Maybe we add _two_ here, if the mark is still in 'used' state.
+        // But surely the lowest bit is unset afterwards and old_mark < new_mark (in a wrapping
+        // sense of this relation). This marks the buffer as owned by the producer.
+        let new_mark = (old_mark | 1).wrapping_add(1);
+        target.mark[0].store(new_mark, Ordering::Release);
+
+        // If we wrapped, increase the generation for a consistent timestamp.
+        if new_mark < old_mark {
+            let new_gen = target.mark[0].load(Ordering::Acquire) + 1;
+            self.generation = self.generation.max(new_gen);
+        }
+
+        (old_mark, new_mark)
     }
 
     fn descriptors(&self) -> &[DescriptorInner] {
@@ -202,6 +245,11 @@ impl RingMapped {
             // Safety: the layout of `DescriptorInner` is just an array of 8 AtomicU32.
             &*core::ptr::slice_from_raw_parts(raw.as_ptr() as *const DescriptorInner, raw.len() / 8)
         }
+    }
+
+    /// Return the unused remaining part of memory.
+    pub fn tail(&self) -> &[AtomicU32] {
+        &self.mapping[..self.layout.tail]
     }
 
     fn layout_for(len: usize, options: &RingOptions) -> Result<Layout, MapError> {
@@ -222,22 +270,15 @@ impl RingMapped {
         let usable_elements = usable_elements
             .checked_sub(non_sharing_count)
             .ok_or(MapError(11))?;
-        let _tail = usable_elements
+        let tail = usable_elements
             .checked_sub(descriptor_elements)
             .ok_or(MapError(11))?;
 
         Ok(Layout {
             index_descriptors,
             index_descriptors_mask: options.nr_descriptors - 1,
+            tail,
         })
-    }
-}
-
-impl Drop for Ring {
-    fn drop(&mut self) {
-        let mmap = core::mem::take(&mut self.mapped.mapping);
-        // Safety: no more references to this region of memory.
-        unsafe { self.mapper.munmap(mmap, self.inner.len()) };
     }
 }
 
@@ -246,29 +287,19 @@ fn primitive_ring_ops() {
     const INIT: AtomicU32 = AtomicU32::new(0);
     static REGION: [AtomicU32; 1 << 10] = [INIT; 1 << 10];
 
-    let layout = RingMapped::layout_for(REGION.len(), &RingOptions { nr_descriptors: 16 }).unwrap();
-
     let desc = Descriptor {
         start: 0,
         end: 0xabab,
         payload: 0xdead_beef,
     };
 
-    let mut ring = RingMapped {
-        mapping: &REGION,
-        position: 0,
-        layout,
-    };
+    let mut ring = RingMapped::wrap(&REGION, &RingOptions { nr_descriptors: 16 }).unwrap();
 
     ring.push(desc);
 
     drop(ring);
 
-    let mut ring = RingMapped {
-        mapping: &REGION,
-        position: 0,
-        layout,
-    };
+    let mut ring = RingMapped::wrap(&REGION, &RingOptions { nr_descriptors: 16 }).unwrap();
 
     let found = ring.restore();
     assert_eq!(found, Some(desc));
