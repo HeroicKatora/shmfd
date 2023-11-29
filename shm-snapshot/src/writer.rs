@@ -14,7 +14,9 @@ pub struct File {
 
 pub struct Head {
     head: WriteHead,
-    /// The memory map protecting the validity of the write head.
+    /// The memory map protecting the validity of the write head. This is purely for safety, not
+    /// accessing the field besides `Drop`.
+    #[allow(dead_code)]
     file: MmapRaw,
 }
 
