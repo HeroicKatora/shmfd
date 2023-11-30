@@ -1,6 +1,8 @@
+#[cfg(test)]
+mod tests;
 mod writer;
 
-pub use writer::{File, Writer};
+pub use writer::{File, Snapshot, Writer};
 use writer::Head;
 
 use shm_fd::SharedFd;
@@ -15,9 +17,13 @@ pub struct CommitError {
 impl File {
     pub fn new(fd: SharedFd) -> Result<Self, std::io::Error> {
         let file = MmapRaw::map_raw(&fd)?;
-
         let head = Head::from_map(file);
         Ok(File { head })
+    }
+
+    #[inline(always)]
+    pub fn valid(&self, into: impl Extend<Snapshot>) {
+        self.head.valid(into)
     }
 
     pub fn into_writer(self) -> Writer {
@@ -32,6 +38,11 @@ impl Writer {
             Ok(n) => Ok(Commit(n)),
             Err(_) => Err(CommitError { _inner: () })
         }
+    }
+
+    #[inline(always)]
+    pub fn valid(&self, into: impl Extend<Snapshot>) {
+        self.head.valid(into)
     }
 }
 

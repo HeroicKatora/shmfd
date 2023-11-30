@@ -1,4 +1,5 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::iter::Extend;
 use memmap2::MmapRaw;
 
 pub struct Writer {
@@ -12,6 +13,11 @@ pub struct File {
     pub(crate) head: Head,
 }
 
+pub struct ConfigureFile {
+    pub entries: u64,
+    pub data: u64,
+}
+
 pub struct Head {
     head: WriteHead,
     /// The memory map protecting the validity of the write head. This is purely for safety, not
@@ -20,8 +26,25 @@ pub struct Head {
     file: MmapRaw,
 }
 
+pub struct Snapshot {
+    pub offset: u64,
+    pub length: u64,
+}
+
+pub(crate) trait Collect<T> {
+    fn insert_one(&mut self, _: T);
+}
+
+impl<T> Collect<T> for Vec<T> {
+    fn insert_one(&mut self, val: T) {
+        self.push(val)
+    }
+}
+
 pub struct Entry<'lt> {
     index: u64,
+    offset: u64,
+    length: u64,
     head: &'lt mut WriteHead,
 }
 
@@ -41,10 +64,10 @@ pub(crate) struct WriteHead {
     /// Our process / thread internal view of the head page mapped in the file.
     ///
     /// This exists solely for internal consistency.
-    cache: HeadCache,
-    meta: &'static HeadPage,
-    sequence: &'static [SequencePage],
-    data: &'static [DataPage],
+    pub(crate) cache: HeadCache,
+    pub(crate) meta: &'static HeadPage,
+    pub(crate) sequence: &'static [SequencePage],
+    pub(crate) data: &'static [DataPage],
 }
 
 struct HeadMapRaw {
@@ -55,6 +78,31 @@ struct HeadMapRaw {
 
 impl Head {
     pub const RECENT_VERSION: u32 = 0;
+
+    pub(crate) fn configure(&mut self, cfg: &ConfigureFile) {
+        assert!(cfg.entries.next_power_of_two() == cfg.entries);
+        assert!(cfg.data.next_power_of_two() == cfg.data);
+
+        self.head.pre_configure_entries(cfg.entries);
+        self.head.pre_configure_pages(cfg.data);
+    }
+
+    #[inline(always)]
+    pub(crate) fn valid(&self, into: impl Extend<Snapshot>) {
+        struct Collector<T>(T);
+
+        impl<T, V> Collect<T> for Collector<V>
+        where
+            V: Extend<T>
+        {
+            fn insert_one(&mut self, val: T) {
+                self.0.extend(core::iter::once(val));
+            }
+        }
+
+        // Relaxed ordering is enough since we're the only reader still.
+        self.head.iter_valid(&mut Collector(into), Ordering::Relaxed);
+    }
 
     /// Construct this wrapper
     pub(crate) fn from_map(file: MmapRaw) -> Self {
@@ -130,14 +178,73 @@ impl Head {
 
         entry.invalidate_heads_to(end_ptr);
         entry.copy_from_slice(data);
+
         Ok(entry.commit())
     }
 }
 
 impl WriteHead {
+    pub(crate) fn pre_configure_entries(&mut self, num: u64) {
+        assert!(num.next_power_of_two() == num);
+        self.cache.entry_mask = num - 1;
+    }
+
+    pub(crate) fn pre_configure_pages(&mut self, num: u64) {
+        assert!(num.next_power_of_two() == num);
+        self.cache.page_mask = num - 1;
+    }
+
+    pub(crate) fn configure_pages(&mut self) {
+        assert_eq!(core::mem::size_of::<DataPage>(), core::mem::size_of::<SequencePage>());
+        assert!(self.cache.page_mask > 0);
+        assert!(self.cache.entry_mask > 0);
+
+        let sequence: usize = (self.cache.entry_mask + 1)
+            .try_into()
+            .expect("Invalid configured entry mask");
+        let sequence = sequence.next_power_of_two();
+
+        let data: usize = (self.cache.page_mask + 1)
+            .try_into()
+            .expect("Invalid configured page mask");
+        let data = data.next_power_of_two();
+
+        let psequence = sequence / SequencePage::DATA_COUNT
+            + usize::from(sequence % SequencePage::DATA_COUNT != 0);
+        let pdata = data / core::mem::size_of::<DataPage>()
+            + usize::from(data % core::mem::size_of::<DataPage>() != 0);
+
+        self.sequence = &self.sequence[..psequence];
+        self.data = &self.data[psequence..][..pdata];
+
+        self.meta.page_mask.store(self.cache.page_mask, Ordering::Release);
+    }
+
     pub(crate) fn entry(&mut self) -> Entry<'_> {
-        let index = self.cache.page_write_offset;
-        Entry { head: self, index }
+        let index = self.cache.entry_write_offset;
+        let offset = self.cache.page_write_offset;
+        Entry { head: self, length: 0, index, offset }
+    }
+
+    pub(crate) fn iter_valid(
+        &self,
+        extend: &mut dyn Collect<Snapshot>,
+        ordering: Ordering,
+    ) {
+        let seqs = self.sequence.iter().flat_map(|seq| &seq.data);
+
+        for seq in seqs {
+            let length = seq.length.load(ordering);
+
+            if length == 0 {
+                continue;
+            }
+
+            extend.insert_one(Snapshot {
+                length,
+                offset: seq.offset.load(ordering),
+            });
+        }
     }
 
     pub(crate) fn new_write_offset(&self, n: usize) -> Option<u64> {
@@ -174,7 +281,7 @@ impl WriteHead {
         self.cache.page_read_offset = data;
     }
 
-    pub(crate) fn copy_from_slice(&mut self, data: &[u8]) {
+    pub(crate) fn copy_from_slice(&mut self, data: &[u8]) -> u64 {
         let mut n = self.cache.page_write_offset;
 
         for (&b, idx) in data.iter().zip(n..) {
@@ -183,6 +290,7 @@ impl WriteHead {
         }
 
         self.cache.page_write_offset = n;
+        n
     }
 
     fn invalidate_at(&mut self, idx: u64) -> u64 {
@@ -193,6 +301,18 @@ impl WriteHead {
 
         let entry = &self.sequence[page].data[entry];
         entry.length.swap(0, Ordering::Relaxed)
+    }
+
+    fn insert_at(&mut self, idx: u64, snap: Snapshot) {
+        let idx = (idx & self.cache.entry_mask) as usize;
+
+        let page = idx / SequencePage::DATA_COUNT;
+        let entry = idx % SequencePage::DATA_COUNT;
+
+        let entry = &self.sequence[page].data[entry];
+
+        entry.offset.store(snap.offset, Ordering::Release);
+        entry.length.store(snap.length, Ordering::Release);
     }
 
     fn write_at(&self, idx: u64, byte: u8) {
@@ -217,6 +337,11 @@ impl WriteHead {
 impl Entry<'_> {
     /// Consume the entry, putting it into the sequence buffer.
     pub(crate) fn commit(self) -> u64 {
+        self.head.insert_at(self.index, Snapshot {
+            length: self.length,
+            offset: self.offset,
+        });
+
         self.index
     }
 
@@ -229,11 +354,11 @@ impl Entry<'_> {
     }
 
     pub(crate) fn copy_from_slice(&mut self, data: &[u8]) {
-        self.head.copy_from_slice(data);
+        self.length += self.head.copy_from_slice(data);
     }
 }
 
-struct HeadCache {
+pub(crate) struct HeadCache {
     entry_mask: u64,
     entry_read_offset: u64,
     entry_write_offset: u64,
@@ -255,7 +380,8 @@ impl HeadCache {
     }
 }
 
-struct HeadPage {
+#[derive(Default)]
+pub(crate) struct HeadPage {
     version: AtomicU32,
     /// The mask to translate stream offset to a specific page offset.
     page_mask: AtomicU64,
@@ -267,13 +393,24 @@ impl HeadPage {
     const PAGE_SZ: usize = 4096;
 }
 
-struct SequencePage {
+pub(crate) struct SequencePage {
     data: [SequenceEntry; Self::DATA_COUNT],
 }
 
 struct SequenceEntry {
     offset: AtomicU64,
     length: AtomicU64,
+}
+
+impl Default for SequencePage {
+    fn default() -> Self {
+        SequencePage {
+            data: [0; Self::DATA_COUNT].map(|_i| SequenceEntry {
+                offset: AtomicU64::new(0),
+                length: AtomicU64::new(0),
+            }),
+        }
+    }
 }
 
 impl SequencePage {
@@ -283,14 +420,19 @@ impl SequencePage {
     const DATA_COUNT: usize = 4096 / 16;
 }
 
-struct DataPage {
+pub(crate) struct DataPage {
     data: [AtomicU64; Self::DATA_COUNT],
-}
-
-impl SequencePage {
 }
 
 impl DataPage {
     // One AtomicU64 per entry dividing the page.
     const DATA_COUNT: usize = 4096 / 8;
+}
+
+impl Default for DataPage {
+    fn default() -> Self {
+        DataPage {
+            data: [0; Self::DATA_COUNT].map(|_i| AtomicU64::new(0)),
+        }
+    }
 }
