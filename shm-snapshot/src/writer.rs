@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use core::iter::Extend;
 use memmap2::MmapRaw;
 
@@ -13,9 +13,11 @@ pub struct File {
     pub(crate) head: Head,
 }
 
+#[derive(Default, Debug)]
 pub struct ConfigureFile {
     pub entries: u64,
     pub data: u64,
+    layout_version: u64,
 }
 
 pub struct Head {
@@ -26,6 +28,7 @@ pub struct Head {
     file: MmapRaw,
 }
 
+#[derive(Debug)]
 pub struct Snapshot {
     pub offset: u64,
     pub length: u64,
@@ -79,19 +82,49 @@ struct HeadMapRaw {
 impl Head {
     pub const RECENT_VERSION: u32 = 0;
 
+    fn fitting_power_of_two(value: u64) -> u64 {
+        const HIGEST_BIT_SET: u64 = !((!0) >> 1);
+        // Must be a power of two, use the next lower one.
+        HIGEST_BIT_SET >> value.leading_zeros()
+    }
+
+    pub(crate) fn discover(&mut self, cfg: &mut ConfigureFile) {
+        let entry_mask = self.head.meta.entry_mask.load(Ordering::Relaxed);
+        let data_mask = self.head.meta.page_mask.load(Ordering::Relaxed);
+
+        let layout_version = self.head.meta.version.load(Ordering::Relaxed);
+        assert!(entry_mask < usize::MAX as u64);
+        assert!(data_mask < usize::MAX as u64);
+
+        let sequence = (entry_mask + 1) as usize;
+        // Assume this refers to the whole tail at this point?
+        let pages = self.head.data.len();
+        let psequence = sequence / SequencePage::DATA_COUNT
+            + usize::from(sequence % SequencePage::DATA_COUNT != 0);
+
+        let data_space = (pages - psequence) as u64 * core::mem::size_of::<DataPage>() as u64;
+        let available_entries = Self::fitting_power_of_two(entry_mask + 1);
+        let available_data = Self::fitting_power_of_two(data_space);
+
+        cfg.entries = available_entries;
+        cfg.data = available_data.min(data_mask + 1);
+        cfg.layout_version = layout_version;
+    }
+
     pub(crate) fn configure(&mut self, cfg: &ConfigureFile) {
         assert!(cfg.entries.next_power_of_two() == cfg.entries);
         assert!(cfg.data.next_power_of_two() == cfg.data);
 
         self.head.pre_configure_entries(cfg.entries);
         self.head.pre_configure_pages(cfg.data);
+        self.head.configure_pages();
     }
 
     #[inline(always)]
-    pub(crate) fn valid(&self, into: impl Extend<Snapshot>) {
+    pub(crate) fn valid(&self, into: &mut impl Extend<Snapshot>) {
         struct Collector<T>(T);
 
-        impl<T, V> Collect<T> for Collector<V>
+        impl<T, V> Collect<T> for Collector<&'_ mut V>
         where
             V: Extend<T>
         {
@@ -112,7 +145,8 @@ impl Head {
         /// That happens later when the head is converted to a writer and the caller selected some
         /// minimum requirements. Here we just fulfill validity.
         static FALLBACK_HEAD: HeadPage = HeadPage {
-            version: AtomicU32::new(Head::RECENT_VERSION),
+            version: AtomicU64::new(ConfigureFile::MAGIC_VERSION),
+            entry_mask: AtomicU64::new(0),
             page_mask: AtomicU64::new(0),
             page_write_offset: AtomicU64::new(0),
         };
@@ -169,6 +203,14 @@ impl Head {
     }
 }
 
+impl ConfigureFile {
+    pub(crate) const MAGIC_VERSION: u64 = 1;
+
+    pub fn is_initialized(&self) -> bool {
+        self.layout_version == Self::MAGIC_VERSION
+    }
+}
+
 impl Head {
     pub(crate) fn write(&mut self, data: &[u8]) -> Result<u64, ()> {
         let mut entry = self.head.entry();
@@ -196,8 +238,6 @@ impl WriteHead {
 
     pub(crate) fn configure_pages(&mut self) {
         assert_eq!(core::mem::size_of::<DataPage>(), core::mem::size_of::<SequencePage>());
-        assert!(self.cache.page_mask > 0);
-        assert!(self.cache.entry_mask > 0);
 
         let sequence: usize = (self.cache.entry_mask + 1)
             .try_into()
@@ -217,7 +257,8 @@ impl WriteHead {
         self.sequence = &self.sequence[..psequence];
         self.data = &self.data[psequence..][..pdata];
 
-        self.meta.page_mask.store(self.cache.page_mask, Ordering::Release);
+        self.meta.page_mask.store(self.cache.page_mask, Ordering::Relaxed);
+        self.meta.version.store(ConfigureFile::MAGIC_VERSION, Ordering::Release);
     }
 
     pub(crate) fn entry(&mut self) -> Entry<'_> {
@@ -231,9 +272,18 @@ impl WriteHead {
         extend: &mut dyn Collect<Snapshot>,
         ordering: Ordering,
     ) {
+        // Always use the stored one. If we're iterating a pre-loaded file then this is the one
+        // stored from the previous run, or zeroed if new. If we're iterating over our current
+        // writer then we've previously written it, i.e. the ordering here is always good too, no
+        // matter which one is used precisely.
+        let max = self.meta.entry_mask.load(ordering);
         let seqs = self.sequence.iter().flat_map(|seq| &seq.data);
 
-        for seq in seqs {
+        for (idx, seq) in seqs.enumerate() {
+            if idx as u64 > max {
+                break;
+            }
+
             let length = seq.length.load(ordering);
 
             if length == 0 {
@@ -382,8 +432,11 @@ impl HeadCache {
 
 #[derive(Default)]
 pub(crate) struct HeadPage {
-    version: AtomicU32,
-    /// The mask to translate stream offset to a specific page offset.
+    /// Magic 8-byte sequence, denoting the layout of this file and identifying it as shm-snapshot.
+    version: AtomicU64,
+    /// The mask to translate stream index to a specific descriptor offset.
+    entry_mask: AtomicU64,
+    /// The mask to translate stream offset to a data page offset.
     page_mask: AtomicU64,
     /// The stream offset of the next byte to write.
     page_write_offset: AtomicU64,

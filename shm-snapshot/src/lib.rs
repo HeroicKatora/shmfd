@@ -2,10 +2,9 @@
 mod tests;
 mod writer;
 
-pub use writer::{File, Snapshot, Writer};
+pub use writer::{ConfigureFile, File, Snapshot, Writer};
 use writer::Head;
 
-use shm_fd::SharedFd;
 use memmap2::MmapRaw;
 
 pub struct Commit(u64);
@@ -15,18 +14,28 @@ pub struct CommitError {
 }
 
 impl File {
-    pub fn new(fd: SharedFd) -> Result<Self, std::io::Error> {
+    pub fn new<T: std::os::unix::io::AsRawFd>(fd: T) -> Result<Self, std::io::Error> {
         let file = MmapRaw::map_raw(&fd)?;
         let head = Head::from_map(file);
         Ok(File { head })
     }
 
     #[inline(always)]
-    pub fn valid(&self, into: impl Extend<Snapshot>) {
+    pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
         self.head.valid(into)
     }
 
-    pub fn into_writer(self) -> Writer {
+    pub fn discover(&mut self, cfg: &mut ConfigureFile) {
+        self.head.discover(cfg)
+    }
+
+    pub fn configure(mut self, cfg: &ConfigureFile) -> Writer {
+        self.head.configure(cfg);
+        self.into_writer_unguarded()
+    }
+
+    /// Convert this into a writer, without minding data consistency.
+    pub fn into_writer_unguarded(self) -> Writer {
         Writer { head: self.head }
     }
 }
@@ -41,8 +50,16 @@ impl Writer {
     }
 
     #[inline(always)]
-    pub fn valid(&self, into: impl Extend<Snapshot>) {
+    pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
         self.head.valid(into)
+    }
+}
+
+impl ConfigureFile {
+    pub fn or_insert_with(&mut self, replace: impl FnOnce(&mut Self)) {
+        if !self.is_initialized() {
+            replace(self)
+        }
     }
 }
 
