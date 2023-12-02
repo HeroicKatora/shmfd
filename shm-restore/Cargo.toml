@@ -7,3 +7,6 @@ edition = "2021"
 version = "0.2.109"
 [dependencies.shm-fd]
 path = "../shm-fd"
+[dependencies.clap]
+version = "4"
+features = ["derive"]

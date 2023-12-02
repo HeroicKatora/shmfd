@@ -1,13 +1,17 @@
 use std::os::unix::{fs::OpenOptionsExt, io::AsRawFd, io::RawFd};
-use std::{fs::OpenOptions, process::Command};
+use std::ffi::{OsString, OsStr};
+use std::{fs::OpenOptions, process};
 
 use shm_fd::SharedFd;
+use clap::{Parser, ValueEnum};
 
 fn main() {
-    let mut args = std::env::args_os().skip(1);
-    let file = args.next().expect("no backup-file given");
-    let cmd = args.next().expect("no command given");
-    let args: Vec<_> = args.collect();
+    let RestoreCommand {
+        snapshot,
+        file,
+        command,
+        args,
+    } = RestoreCommand::parse();
 
     let duped_shmfd = if let Some(fd) = unsafe { SharedFd::from_env() } {
         match unsafe { libc::dup(fd.as_raw_fd()) } {
@@ -24,10 +28,10 @@ fn main() {
         .read(true)
         .write(true)
         .custom_flags(libc::O_DSYNC)
-        .open(file)
+        .open(&file)
         .expect("Failed to open backup file");
 
-    let mut proc = Command::new(&cmd);
+    let mut proc = process::Command::new(command);
     proc.args(&args);
 
     unsafe { fcntl_cloexec(duped_shmfd.as_raw_fd()).expect("failed to set close-on-exec") };
@@ -42,10 +46,60 @@ fn main() {
         })
     };
 
-    if let Some(code) = proc.status().expect("can receive status").code() {
-        drop(protector);
-        std::process::exit(code);
+    match snapshot {
+        None => {
+            if let Some(code) = proc.status().expect("can receive status").code() {
+                drop(protector);
+                std::process::exit(code);
+            }
+        }
+        Some(SnapshotMode::RestoreV1) => {
+            let mut protector = protector;
+            let mut child = proc.spawn().expect("can receive status");
+
+            let status = loop {
+                if let Some(code) = child.try_wait().expect("can receive status") {
+                    break code;
+                };
+
+                if let Ok(protector) = &mut protector {
+                    try_restore_v1(protector, &file);
+                }
+            };
+
+            drop(protector);
+            if let Some(code) = status.code() {
+                std::process::exit(code);
+            }
+        }
     }
+}
+
+#[derive(Parser)]
+struct RestoreCommand {
+    /// Configure making continuous atomic snapshots of the memory while running.
+    ///
+    /// The strategy defines the reliability and/or synchronization mode of the snapshot by a
+    /// strategy. They may require different degrees of coordinate with the client program but are
+    /// in general designed to be lock-free.
+    #[arg(value_enum, long)]
+    snapshot: Option<SnapshotMode>,
+
+    #[arg(help = "The backup file")]
+    file: OsString,
+
+    #[arg(help = "The command to execute with the SHM-FD set as environment variable")]
+    command: OsString,
+
+    args: Vec<OsString>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum SnapshotMode {
+    /// Use a lock-free, optimistic snapshot functionality.
+    ///
+    /// The reference implementation is in `shm-snapshot`.
+    RestoreV1,
 }
 
 struct WriteBack {
@@ -53,12 +107,14 @@ struct WriteBack {
     bck: RawFd,
 }
 
+struct Dropped {
+    write_back: WriteBack,
+    how: fn(RawFd, RawFd),
+}
+
 unsafe fn writeback_protector(
     WriteBack { shm, bck }: WriteBack,
-) -> Result<impl Drop, std::io::Error> {
-    /* First copy existing data to the shared memory.
-     * We choose this to discover what is supported.
-     */
+) -> Result<Dropped, std::io::Error> {
     fn copy_file_range(source: RawFd, dest: RawFd) -> libc::ssize_t {
         unsafe {
             let length = libc::lseek(source, 0, libc::SEEK_END);
@@ -78,6 +134,9 @@ unsafe fn writeback_protector(
         }
     }
 
+    /* First copy existing data to the shared memory.
+     * We choose this to discover what is supported.
+     */
     let how: fn(RawFd, RawFd) = match copy_file_range(bck, shm) {
         diff if matches!(diff as libc::c_int, libc::EXDEV | libc::EFBIG) => {
             todo!("Fallback to normal copy")
@@ -87,11 +146,6 @@ unsafe fn writeback_protector(
             copy_file_range(source, dest);
         },
     };
-
-    struct Dropped {
-        write_back: WriteBack,
-        how: fn(RawFd, RawFd),
-    }
 
     /* On drop, copy all data back to the backup file.
      */
@@ -105,6 +159,9 @@ unsafe fn writeback_protector(
         write_back: WriteBack { shm, bck },
         how,
     })
+}
+
+fn try_restore_v1(dropped: &mut Dropped, backup: &OsStr) {
 }
 
 // Ignore SIGTERM..
