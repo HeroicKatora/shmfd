@@ -28,7 +28,7 @@ pub struct Head {
     file: MmapRaw,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Snapshot {
     pub offset: u64,
     pub length: u64,

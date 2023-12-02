@@ -1,7 +1,10 @@
-use std::os::unix::{fs::OpenOptionsExt, io::AsRawFd, io::RawFd};
+use std::collections::HashSet;
+use std::os::unix::{fs::OpenOptionsExt, io::AsRawFd, io::RawFd, io::IntoRawFd};
 use std::ffi::{OsString, OsStr};
-use std::{fs::OpenOptions, process};
+use std::{fs::OpenOptions, process, path::Path};
 
+
+use memmap2::MmapRaw;
 use shm_fd::SharedFd;
 use clap::{Parser, ValueEnum};
 
@@ -44,16 +47,24 @@ fn main() {
             shm: duped_shmfd,
             bck: backup_file.as_raw_fd(),
         })
-    };
+    }.expect("Can protect with write back");
+
+    // Before we start, let's prepare whatever backup already exists.
+    {
+        (protector.how)(protector.write_back.bck, protector.write_back.shm);
+    }
 
     match snapshot {
         None => {
+            let protector: Dropped = protector;
             if let Some(code) = proc.status().expect("can receive status").code() {
                 drop(protector);
                 std::process::exit(code);
             }
         }
         Some(SnapshotMode::RestoreV1) => {
+            let path = file_with_parent(&file).expect("backup file to have a containing directory");
+
             let mut protector = protector;
             let mut child = proc.spawn().expect("can receive status");
 
@@ -62,8 +73,10 @@ fn main() {
                     break code;
                 };
 
-                if let Ok(protector) = &mut protector {
-                    try_restore_v1(protector, &file);
+                {
+                    if let Err(err) = try_restore_v1(&mut protector, path) {
+                        eprintln!("Error making backup: {err}");
+                    }
                 }
             };
 
@@ -118,6 +131,7 @@ unsafe fn writeback_protector(
     fn copy_file_range(source: RawFd, dest: RawFd) -> libc::ssize_t {
         unsafe {
             let length = libc::lseek(source, 0, libc::SEEK_END);
+            let _ = libc::lseek(dest, 0, libc::SEEK_SET);
             let mut off_source = 0;
             let mut off_dest = 0;
 
@@ -134,12 +148,51 @@ unsafe fn writeback_protector(
         }
     }
 
+    fn copy_file_all(source: RawFd, dest: RawFd) -> libc::ssize_t {
+        unsafe {
+            let length = libc::lseek(source, 0, libc::SEEK_END);
+            let _ = libc::lseek(dest, 0, libc::SEEK_SET);
+            libc::ftruncate(dest, length);
+        }
+
+        let Ok(file) = MmapRaw::map_raw(&source) else {
+            return -1;
+        };
+
+        let start_ptr = file.as_ptr() as *const libc::c_void;
+        let start_len = file.len();
+
+        let mut remaining = start_len;
+        while remaining > 0 {
+            let written = unsafe {
+                libc::write(dest, start_ptr, start_len)
+            };
+
+            if written < 0 {
+                return -1;
+            }
+
+            remaining = remaining.saturating_sub(written as usize);
+        }
+
+        start_len as libc::ssize_t
+    }
+
     /* First copy existing data to the shared memory.
      * We choose this to discover what is supported.
      */
     let how: fn(RawFd, RawFd) = match copy_file_range(bck, shm) {
-        diff if matches!(diff as libc::c_int, libc::EXDEV | libc::EFBIG) => {
-            todo!("Fallback to normal copy")
+        // This can be hit, if the file systems target does not support copy_file_range from a
+        // memory-mapped file. Which is realistically pretty much all of them?
+        diff if matches!(diff as libc::c_int, -1)
+            && matches!(
+                unsafe { *libc::__errno_location() },
+                libc::EXDEV | libc::EFBIG
+            ) =>
+        {
+            |source, dest| {
+                copy_file_all(source, dest);
+            }
         }
         diff if diff < 0 => return Err(std::io::Error::last_os_error()),
         _ => |source, dest| {
@@ -161,7 +214,45 @@ unsafe fn writeback_protector(
     })
 }
 
-fn try_restore_v1(dropped: &mut Dropped, backup: &OsStr) {
+#[derive(Clone, Copy)]
+struct FileWithParent<'lt>(&'lt Path, &'lt Path);
+
+fn file_with_parent(file: &OsStr) -> Option<FileWithParent<'_>> {
+    let path = Path::new(file);
+    let parent = path.parent()?;
+    Some(FileWithParent(path, parent))
+}
+
+fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), std::io::Error> {
+    let FileWithParent(backup_path, parent) = backup;
+    let snapshot = shm_snapshot::File::new(dropped.write_back.shm)?;
+
+    let mut pre_valid = HashSet::new();
+    snapshot.valid(&mut pre_valid);
+
+    // Detect which portions stayed immutable by collecting the assertions twice. Once before we
+    // write the file, and once afterwards. The entries which were active before certify that their
+    // data was written before the range copy, the entries which were active afterwards certify
+    // that their data range was not modified before the end of the range copy.
+
+    // Write everything into a temporary file first.
+    let pending = tempfile::NamedTempFile::new_in(parent)?;
+    (dropped.how)(dropped.write_back.shm, pending.as_raw_fd());
+
+    // We then check if the backup file contains any successful data transaction.
+    let mut post_valid = HashSet::new();
+    snapshot.valid(&mut post_valid);
+
+    // And now we must mask from the backup file all entries that we can not prove are valid. If
+    // there are any remaining entries, this backup was successful.
+
+    // Success! We now swap out our file handles.
+    let pending = pending.persist(backup_path)?;
+    let mut pending_fd = pending.into_raw_fd();
+    core::mem::swap(&mut dropped.write_back.bck, &mut pending_fd);
+    unsafe { libc::close(pending_fd) };
+
+    Ok(())
 }
 
 // Ignore SIGTERM..

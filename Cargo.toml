@@ -6,3 +6,4 @@ members = [
   "shm-restore",
   "examples/primes"
 ]
+resolver = "2"
