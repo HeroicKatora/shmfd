@@ -17,13 +17,21 @@ cargo build --release -p shm-fd -p primes
 ./target/release/shm-fd watch -n 0.1 ./target/release/primes
 ```
 
-## shm-state
+## Library hierarchy
 
-Work-In-Progress.
-
-Additional utilities on-top of the share file descriptor concepts. In
-particular, some semantic helper structures that help achieve hot-reloading,
-state migration, or similar high-level goals.
+- `shm-fd` is mostly a library/binary component to setup and consume a file
+  descriptor to a shared file, specifying the default transport by which it is
+  passed (i.e. the environment variable and how to interpret the setting).
+- `shm-restore` is an intermediate layer that provides persistent snapshot
+  backups of the state represented in the shared memory file.
+- `shm-snapshot` implements the client side of the `shm-restore`. WIP: maybe we
+  should merge this with `shm-restore` since it provides two components of the
+  same concept and they must share at least layout of their mechanisms?
+- `shm-state` is a high-level library on top of the restore/atomic journal
+  mechanisms which aims to provide efficient data structures in which a binary
+  might keep state. These data structure should provide all access
+  characteristics of (immutable) memory data structures with the snapshot
+  persistence of the journaling.
 
 ## shm-restore
 
@@ -49,3 +57,11 @@ cargo build --release -p shm-fd -p shm-restore -p primes
 ^C
 hexdump ./target/prime-shapshot
 ```
+
+## shm-state
+
+Work-In-Progress.
+
+Additional utilities on-top of the share file descriptor concepts. In
+particular, some semantic helper structures that help achieve hot-reloading,
+state migration, or similar high-level goals.
