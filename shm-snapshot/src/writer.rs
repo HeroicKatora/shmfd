@@ -17,6 +17,7 @@ pub struct File {
 pub struct ConfigureFile {
     pub entries: u64,
     pub data: u64,
+    pub initial_offset: u64,
     layout_version: u64,
 }
 
@@ -80,8 +81,6 @@ struct HeadMapRaw {
 }
 
 impl Head {
-    pub const RECENT_VERSION: u32 = 0;
-
     fn fitting_power_of_two(value: u64) -> u64 {
         const HIGEST_BIT_SET: u64 = !((!0) >> 1);
         // Must be a power of two, use the next lower one.
@@ -91,6 +90,7 @@ impl Head {
     pub(crate) fn discover(&mut self, cfg: &mut ConfigureFile) {
         let entry_mask = self.head.meta.entry_mask.load(Ordering::Relaxed);
         let data_mask = self.head.meta.page_mask.load(Ordering::Relaxed);
+        let page_write_offset = self.head.meta.page_write_offset.load(Ordering::Relaxed);
 
         let layout_version = self.head.meta.version.load(Ordering::Relaxed);
         assert!(entry_mask < usize::MAX as u64);
@@ -108,6 +108,7 @@ impl Head {
 
         cfg.entries = available_entries;
         cfg.data = available_data.min(data_mask + 1);
+        cfg.initial_offset = page_write_offset;
         cfg.layout_version = layout_version;
     }
 
@@ -117,6 +118,7 @@ impl Head {
 
         self.head.pre_configure_entries(cfg.entries);
         self.head.pre_configure_pages(cfg.data);
+        self.head.pre_configure_write(cfg.initial_offset);
         self.head.configure_pages();
     }
 
@@ -204,7 +206,7 @@ impl Head {
 }
 
 impl ConfigureFile {
-    pub(crate) const MAGIC_VERSION: u64 = 1;
+    pub(crate) const MAGIC_VERSION: u64 = 0x96c2_a6f4b68519b3;
 
     pub fn is_initialized(&self) -> bool {
         self.layout_version == Self::MAGIC_VERSION
@@ -236,6 +238,10 @@ impl WriteHead {
         self.cache.page_mask = num - 1;
     }
 
+    pub(crate) fn pre_configure_write(&mut self, offset: u64) {
+        self.cache.page_write_offset = offset;
+    }
+
     pub(crate) fn configure_pages(&mut self) {
         assert_eq!(core::mem::size_of::<DataPage>(), core::mem::size_of::<SequencePage>());
 
@@ -258,6 +264,8 @@ impl WriteHead {
         self.data = &self.data[psequence..][..pdata];
 
         self.meta.page_mask.store(self.cache.page_mask, Ordering::Relaxed);
+        self.meta.page_write_offset.store(self.cache.page_write_offset, Ordering::Relaxed);
+
         self.meta.version.store(ConfigureFile::MAGIC_VERSION, Ordering::Release);
     }
 
