@@ -9,7 +9,7 @@ fn main() {
 
     if let Some(fd) = unsafe { SharedFd::from_env() } {
         file = fd.into_file().expect("opening shared fd failed");
-        let _ = file.set_len(1_000_000u64);
+        let _ = file.set_len(100_000_000u64);
         mapping = unsafe { MmapMut::map_mut(file.as_raw_fd()) }.expect("memmap failed");
         memory = &mut mapping[..];
     } else {
@@ -22,7 +22,7 @@ fn main() {
 
 /// A very simple prime sieve..
 fn run_main_routine(values: &mut [u64]) {
-    const CHUNK: usize = 1000;
+    const CHUNK: usize = 100000;
 
     if values[0] == 0 {
         values[0] = 2;
