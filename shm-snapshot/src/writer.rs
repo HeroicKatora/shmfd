@@ -225,7 +225,7 @@ impl Head {
     pub(crate) fn write_with(
         &mut self,
         data: &[u8],
-        intermediate: &mut dyn FnMut(PreparedTransaction),
+        intermediate: &mut dyn FnMut(PreparedTransaction) -> bool,
     ) -> Result<u64, ()> {
         let mut entry = self.head.entry();
         let Some(end_ptr) = entry.new_write_offset(data.len()) else {
@@ -234,11 +234,14 @@ impl Head {
 
         entry.invalidate_heads_to(end_ptr);
         entry.copy_from_slice(data);
-        intermediate(PreparedTransaction {
-            tail: entry.head.tail,
-        });
 
-        Ok(entry.commit())
+        if intermediate(PreparedTransaction {
+            tail: entry.head.tail,
+        }) {
+            Ok(entry.commit())
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -280,6 +283,7 @@ impl WriteHead {
         self.data = data;
         self.tail = tail;
 
+        self.meta.entry_mask.store(self.cache.entry_mask, Ordering::Relaxed);
         self.meta.page_mask.store(self.cache.page_mask, Ordering::Relaxed);
         self.meta.page_write_offset.store(self.cache.page_write_offset, Ordering::Relaxed);
 
@@ -433,6 +437,12 @@ impl Entry<'_> {
     }
 }
 
+impl<'lt> PreparedTransaction<'lt> {
+    pub fn tail(&self) -> &'lt [DataPage] {
+        self.tail
+    }
+}
+
 pub(crate) struct HeadCache {
     entry_mask: u64,
     entry_read_offset: u64,
@@ -498,8 +508,8 @@ impl SequencePage {
     const DATA_COUNT: usize = 4096 / 16;
 }
 
-pub(crate) struct DataPage {
-    data: [AtomicU64; Self::DATA_COUNT],
+pub struct DataPage {
+    pub data: [AtomicU64; Self::DATA_COUNT],
 }
 
 impl DataPage {

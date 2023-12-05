@@ -2,12 +2,18 @@
 mod tests;
 mod writer;
 
-pub use writer::{ConfigureFile, File, PreparedTransaction, Snapshot, Writer};
+pub use writer::{ConfigureFile, DataPage, File, PreparedTransaction, Snapshot, Writer};
 use writer::Head;
 
 use memmap2::MmapRaw;
 
-pub struct Commit(u64);
+#[derive(Debug)]
+pub struct Commit {
+    /// The entry index at which we have in fact committed. Not clear what use it would be to make
+    /// this number available but we want to debug the struct anyways.
+    #[allow(dead_code)]
+    entry: u64,
+}
 
 pub struct CommitError {
     _inner: (),
@@ -44,8 +50,8 @@ impl File {
 impl Writer {
     /// Insert some data into the atomic log of the shared memory.
     pub fn write(&mut self, data: &[u8]) -> Result<Commit, CommitError> {
-        match self.head.write_with(data, &mut |_tx| {})  {
-            Ok(n) => Ok(Commit(n)),
+        match self.head.write_with(data, &mut |_tx| true)  {
+            Ok(entry) => Ok(Commit { entry }),
             Err(_) => Err(CommitError { _inner: () })
         }
     }
@@ -56,17 +62,15 @@ impl Writer {
     pub fn write_with(
         &mut self,
         data: &[u8],
-        intermediate: impl FnOnce(PreparedTransaction)
+        intermediate: impl FnOnce(PreparedTransaction) -> bool
     ) -> Result<Commit, CommitError> {
         let mut dropped = Some(intermediate);
         let mut intermediate = move |tx: PreparedTransaction<'_>| {
-            if let Some(fn_) = dropped.take() {
-                fn_(tx)
-            }
+            dropped.take().map_or(false, |fn_| fn_(tx))
         };
 
         match self.head.write_with(data, &mut intermediate)  {
-            Ok(n) => Ok(Commit(n)),
+            Ok(entry) => Ok(Commit { entry }),
             Err(_) => Err(CommitError { _inner: () })
         }
     }

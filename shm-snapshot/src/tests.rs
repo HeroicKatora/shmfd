@@ -21,6 +21,33 @@ fn initialize_inner_basic() {
     });
 }
 
+#[test]
+fn commit_not() {
+    let mut valids = vec![];
+    with_setup(|mut head| {
+        head.iter_valid(&mut valids, Ordering::Relaxed);
+        assert!(valids.is_empty());
+
+        head.pre_configure_pages(0x80);
+        head.pre_configure_entries(0x10);
+        head.configure_pages();
+
+        let mut entry = head.entry();
+        entry.copy_from_slice(b"Hello, world!");
+        drop(entry);
+
+        head.iter_valid(&mut valids, Ordering::Relaxed);
+        assert_eq!(valids.len(), 0);
+
+        let mut entry = head.entry();
+        entry.copy_from_slice(b"Hello, world!");
+        entry.commit();
+
+        head.iter_valid(&mut valids, Ordering::Relaxed);
+        assert_eq!(valids.len(), 1);
+    })
+}
+
 #[derive(Default)]
 struct TestSetup {
     head: HeadPage,
