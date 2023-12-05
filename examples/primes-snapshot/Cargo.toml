@@ -1,0 +1,12 @@
+[package]
+name = "primes-snapshot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies.shm-fd]
+path = "../../shm-fd"
+features = ["memfile"]
+[dependencies.bytemuck]
+version = "1.7"
+[dependencies.memmap2]
+version = "0.5"

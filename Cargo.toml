@@ -4,6 +4,7 @@ members = [
   "shm-state",
   "shm-snapshot",
   "shm-restore",
-  "examples/primes"
+  "examples/primes",
+  "examples/primes-snapshot",
 ]
 resolver = "2"
