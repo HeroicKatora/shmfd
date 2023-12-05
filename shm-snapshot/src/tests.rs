@@ -36,5 +36,6 @@ fn with_setup(method: impl FnOnce(WriteHead)) {
         meta: &mut test.head,
         sequence: &mut test.sequence,
         data: &mut test.data,
+        tail: &[],
     })
 }

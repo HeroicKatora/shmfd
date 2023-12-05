@@ -45,11 +45,15 @@ impl<T> Collect<T> for Vec<T> {
     }
 }
 
-pub struct Entry<'lt> {
+pub(crate) struct Entry<'lt> {
     index: u64,
     offset: u64,
     length: u64,
     head: &'lt mut WriteHead,
+}
+
+pub struct PreparedTransaction<'lt> {
+    tail: &'lt [DataPage],
 }
 
 /// Resolved pointers _into_ a memory map.
@@ -72,6 +76,8 @@ pub(crate) struct WriteHead {
     pub(crate) meta: &'static HeadPage,
     pub(crate) sequence: &'static [SequencePage],
     pub(crate) data: &'static [DataPage],
+    /// Data pages from the shared memory which we do not touch ourselves, i.e. user reserved.
+    pub(crate) tail: &'static [DataPage],
 }
 
 struct HeadMapRaw {
@@ -170,6 +176,7 @@ impl Head {
                     meta: &*head.meta,
                     sequence: &*head.sequence,
                     data: &*head.data,
+                    tail: &[],
                 }
             }
         } else {
@@ -178,6 +185,7 @@ impl Head {
                 meta: &FALLBACK_HEAD,
                 data: &[],
                 sequence: &[],
+                tail: &[],
             }
         };
 
@@ -214,7 +222,11 @@ impl ConfigureFile {
 }
 
 impl Head {
-    pub(crate) fn write(&mut self, data: &[u8]) -> Result<u64, ()> {
+    pub(crate) fn write_with(
+        &mut self,
+        data: &[u8],
+        intermediate: &mut dyn FnMut(PreparedTransaction),
+    ) -> Result<u64, ()> {
         let mut entry = self.head.entry();
         let Some(end_ptr) = entry.new_write_offset(data.len()) else {
             return Err(());
@@ -222,6 +234,9 @@ impl Head {
 
         entry.invalidate_heads_to(end_ptr);
         entry.copy_from_slice(data);
+        intermediate(PreparedTransaction {
+            tail: entry.head.tail,
+        });
 
         Ok(entry.commit())
     }
@@ -261,7 +276,9 @@ impl WriteHead {
             + usize::from(data % core::mem::size_of::<DataPage>() != 0);
 
         self.sequence = &self.sequence[..psequence];
-        self.data = &self.data[psequence..][..pdata];
+        let (data, tail) = self.data[psequence..].split_at(pdata);
+        self.data = data;
+        self.tail = tail;
 
         self.meta.page_mask.store(self.cache.page_mask, Ordering::Relaxed);
         self.meta.page_write_offset.store(self.cache.page_write_offset, Ordering::Relaxed);

@@ -2,7 +2,7 @@
 mod tests;
 mod writer;
 
-pub use writer::{ConfigureFile, File, Snapshot, Writer};
+pub use writer::{ConfigureFile, File, PreparedTransaction, Snapshot, Writer};
 use writer::Head;
 
 use memmap2::MmapRaw;
@@ -42,8 +42,30 @@ impl File {
 
 /// Public interface of the writer.
 impl Writer {
+    /// Insert some data into the atomic log of the shared memory.
     pub fn write(&mut self, data: &[u8]) -> Result<Commit, CommitError> {
-        match self.head.write(data)  {
+        match self.head.write_with(data, &mut |_tx| {})  {
+            Ok(n) => Ok(Commit(n)),
+            Err(_) => Err(CommitError { _inner: () })
+        }
+    }
+
+    /// Insert some data into the atomic log of the shared memory.
+    ///
+    /// This also invokes a function before committing the data.
+    pub fn write_with(
+        &mut self,
+        data: &[u8],
+        intermediate: impl FnOnce(PreparedTransaction)
+    ) -> Result<Commit, CommitError> {
+        let mut dropped = Some(intermediate);
+        let mut intermediate = move |tx: PreparedTransaction<'_>| {
+            if let Some(fn_) = dropped.take() {
+                fn_(tx)
+            }
+        };
+
+        match self.head.write_with(data, &mut intermediate)  {
             Ok(n) => Ok(Commit(n)),
             Err(_) => Err(CommitError { _inner: () })
         }
