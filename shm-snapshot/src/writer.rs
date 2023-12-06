@@ -53,6 +53,9 @@ pub(crate) struct Entry<'lt> {
 }
 
 pub struct PreparedTransaction<'lt> {
+    offset: u64,
+    length: u64,
+    head: &'lt mut WriteHead,
     tail: &'lt [DataPage],
 }
 
@@ -236,7 +239,10 @@ impl Head {
         entry.copy_from_slice(data);
 
         if intermediate(PreparedTransaction {
+            offset: entry.offset,
+            length: entry.length,
             tail: entry.head.tail,
+            head: entry.head,
         }) {
             Ok(entry.commit())
         } else {
@@ -368,8 +374,9 @@ impl WriteHead {
             n = n.wrapping_add(1);
         }
 
+        let count = n.wrapping_sub(self.cache.page_write_offset);
         self.cache.page_write_offset = n;
-        n
+        count
     }
 
     fn invalidate_at(&mut self, idx: u64) -> u64 {
@@ -438,6 +445,16 @@ impl Entry<'_> {
 }
 
 impl<'lt> PreparedTransaction<'lt> {
+    pub fn replace(&mut self, data: &[u8]) {
+        assert!(data.len() as u64 <= self.length, "{} > {}", data.len(), self.length);
+        let mut n = self.offset;
+
+        for (&b, idx) in data.iter().zip(n..) {
+            self.head.write_at(idx, b);
+            n = n.wrapping_add(1);
+        }
+    }
+
     pub fn tail(&self) -> &'lt [DataPage] {
         self.tail
     }
@@ -515,6 +532,11 @@ pub struct DataPage {
 impl DataPage {
     // One AtomicU64 per entry dividing the page.
     const DATA_COUNT: usize = 4096 / 8;
+
+    pub fn as_slice_of_u64(this: &[DataPage]) -> &[AtomicU64] {
+        let count = Self::DATA_COUNT * this.len();
+        unsafe { &*core::ptr::slice_from_raw_parts(this.as_ptr() as *const AtomicU64, count) }
+    }
 }
 
 impl Default for DataPage {
