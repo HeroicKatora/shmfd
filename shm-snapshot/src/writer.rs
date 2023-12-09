@@ -29,7 +29,7 @@ pub struct Head {
     file: MmapRaw,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Snapshot {
     pub offset: u64,
     pub length: u64,
@@ -148,6 +148,10 @@ impl Head {
         self.head.iter_valid(&mut Collector(into), Ordering::Relaxed);
     }
 
+    pub(crate) fn read(&self, snapshot: &Snapshot, into: &mut [u8]) {
+        self.head.read(snapshot, into);
+    }
+
     /// Construct this wrapper
     pub(crate) fn from_map(file: MmapRaw) -> Self {
         /// The head page we simulate if the file is too small to contain anything.
@@ -193,6 +197,10 @@ impl Head {
         };
 
         Head { head, file }
+    }
+
+    pub(crate) fn tail(&self) -> &'_ [AtomicU64] {
+        DataPage::as_slice_of_u64(self.head.tail)
     }
 
     /// Safety:
@@ -379,6 +387,13 @@ impl WriteHead {
         count
     }
 
+    pub(crate) fn read(&self, snapshot: &Snapshot, into: &mut [u8]) {
+        for (b, offset) in into.iter_mut().zip(0..snapshot.length) {
+            let idx = snapshot.offset.wrapping_add(offset);
+            *b = self.read_at(idx);
+        }
+    }
+
     fn invalidate_at(&mut self, idx: u64) -> u64 {
         let idx = (idx & self.cache.entry_mask) as usize;
 
@@ -401,7 +416,7 @@ impl WriteHead {
         entry.length.store(snap.length, Ordering::Release);
     }
 
-    fn write_at(&self, idx: u64, byte: u8) {
+    fn idx_at(&self, idx: u64) -> (usize, usize, u32) {
         let idx = idx & self.cache.page_mask;
 
         let offset = idx % 8;
@@ -410,13 +425,26 @@ impl WriteHead {
 
         let data_idx = idx as usize % DataPage::DATA_COUNT;
         let page_idx = idx as usize / DataPage::DATA_COUNT;
+        (page_idx, data_idx, shift as u32)
+    }
 
+    fn write_at(&self, idx: u64, byte: u8) {
+        let (page_idx, data_idx, shift) = self.idx_at(idx);
         let word = &self.data[page_idx].data[data_idx];
         let mask = 0xffu64 << shift;
 
         let old = word.load(Ordering::Relaxed) & !mask;
         let new = old | (u64::from(byte) << shift);
         word.store(new, Ordering::Relaxed);
+    }
+
+    fn read_at(&self, idx: u64) -> u8 {
+        let (page_idx, data_idx, shift) = self.idx_at(idx);
+
+        let word = &self.data[page_idx].data[data_idx];
+        let old = word.load(Ordering::Relaxed);
+
+        ((old >> shift) & 0xff) as u8
     }
 }
 
@@ -455,8 +483,8 @@ impl<'lt> PreparedTransaction<'lt> {
         }
     }
 
-    pub fn tail(&self) -> &'lt [DataPage] {
-        self.tail
+    pub fn tail(&self) -> &'lt [AtomicU64] {
+        DataPage::as_slice_of_u64(self.tail)
     }
 }
 

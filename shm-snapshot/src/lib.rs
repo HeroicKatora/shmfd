@@ -2,9 +2,10 @@
 mod tests;
 mod writer;
 
-pub use writer::{ConfigureFile, DataPage, File, PreparedTransaction, Snapshot, Writer};
+pub use writer::{ConfigureFile, File, PreparedTransaction, Snapshot, Writer};
 use writer::Head;
 
+use core::sync::atomic::AtomicU64;
 use memmap2::MmapRaw;
 
 #[derive(Debug)]
@@ -29,6 +30,14 @@ impl File {
     #[inline(always)]
     pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
         self.head.valid(into)
+    }
+
+    // FIXME: makes little sense. Reading data depends on our configuration, i.e. we need valid
+    // offsets and page masks here. But the `head` does not automatically use those of the file.
+    // Should we instead have a configuration to provide here which is used when valid? Or even
+    // load the one from the file, fresh? The same applies to `valid` however.
+    pub fn read(&self, snapshot: &Snapshot, buffer: &mut [u8]) {
+        self.head.read(snapshot, buffer)
     }
 
     pub fn discover(&mut self, cfg: &mut ConfigureFile) {
@@ -75,9 +84,17 @@ impl Writer {
         }
     }
 
+    pub fn read(&self, snapshot: &Snapshot, buffer: &mut [u8]) {
+        self.head.read(snapshot, buffer);
+    }
+
     #[inline(always)]
     pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
         self.head.valid(into)
+    }
+
+    pub fn tail(&self) -> &[AtomicU64] {
+        self.head.tail()
     }
 }
 

@@ -1,30 +1,17 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use shm_fd::SharedFd;
-use shm_snapshot::{ConfigureFile, DataPage, File, PreparedTransaction};
+use shm_snapshot::{ConfigureFile, File, PreparedTransaction, Writer, Snapshot};
 
 fn main() {
-    let mut mapping;
-    let writer;
-
-    if let Some(fd) = unsafe { SharedFd::from_env() } {
-        let file = fd.into_file().expect("opening shared fd failed");
-        let _ = file.set_len(100_000_000u64);
-        mapping = File::new(file).unwrap();
-        let mut config = ConfigureFile::default();
-
-        mapping.discover(&mut config);
-        config.or_insert_with(|cfg| {
-            cfg.entries = 0x100;
-            cfg.data = 0x800;
-        });
-        writer = mapping.configure(&config);
-    } else {
+    let Some(fd) = (unsafe { SharedFd::from_env() }) else {
         panic!("No shared memory state found");
-    }
+    };
+
+    let (writer, last_prime) = restore_from(fd);
 
     const CHUNK: u64 = 100000;
-    let mut chunk = 0..2;
+    let mut chunk = 0..last_prime;
     let chunks = core::iter::from_fn(move || {
         let ret_chunk = chunk.clone();
         let new_end = chunk.end + CHUNK;
@@ -43,7 +30,7 @@ fn main() {
 
 /// A very simple prime sieve..
 fn run_main_routine(mut tx: PreparedTransaction<'_>, num_range: core::ops::Range<u64>) -> bool {
-    let values = DataPage::as_slice_of_u64(tx.tail());
+    let values = tx.tail();
 
     if values[0].load(Ordering::Relaxed) == 0 {
         values[0].store(2, Ordering::Relaxed);
@@ -120,4 +107,63 @@ fn upper_int_sqrt(num: u64) -> u64 {
     }
 
     r
+}
+
+fn restore_from(fd: SharedFd) -> (Writer, u64) {
+    struct ExtendWith<F>(F);
+
+    impl<F> Extend<Snapshot> for ExtendWith<F>
+        where F: FnMut(Snapshot)
+    {
+        fn extend<T: IntoIterator<Item = Snapshot>>(&mut self, iter: T) {
+            for item in iter {
+                (self.0)(item);
+            }
+        }
+    }
+
+    let file = fd.into_file().expect("opening shared fd failed");
+    let _ = file.set_len(100_000_000u64);
+    let mut mapping = File::new(file).unwrap();
+    let mut config = ConfigureFile::default();
+
+    mapping.discover(&mut config);
+
+    let mut latest_snapshot = None;
+    let mut restore_state = ExtendWith(|snapshot: Snapshot| {
+        latest_snapshot = std::cmp::max_by_key(
+                latest_snapshot, Some(snapshot),
+                |x: &Option<Snapshot>| x.map(|v| v.offset)
+            );
+    });
+
+    mapping.valid(&mut restore_state);
+    config.or_insert_with(|cfg| {
+        cfg.entries = 0x100;
+        cfg.data = 0x800;
+    });
+
+    let writer = mapping.configure(&config);
+    let prime_count = if let Some(latest_snapshot) = latest_snapshot {
+        let mut buffer = [0; 8];
+        writer.read(&latest_snapshot, &mut buffer);
+        u64::from_be_bytes(buffer)
+    } else {
+        0
+    };
+
+    eprintln!("Recovering {prime_count} existing primes");
+    let (retain, scratch) = writer.tail().split_at(prime_count as usize);
+
+    let last_prime = if let Some(last_prime) = retain.last() {
+        for item in scratch {
+            item.store(0, Ordering::Relaxed);
+        }
+
+        last_prime.load(Ordering::Relaxed)
+    } else {
+        2
+    };
+
+    (writer, last_prime)
 }
