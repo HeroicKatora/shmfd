@@ -245,6 +245,8 @@ fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), s
 
     // And now we must mask from the backup file all entries that we can not prove are valid. If
     // there are any remaining entries, this backup was successful.
+    // FIXME: this is not yet implemented, i.e. we have wrong backup files with entries that have
+    // not correctly sandwiched the immutable time interval of their data.
 
     // Success! We now swap out our file handles.
     let pending = pending.persist(backup_path)?;

@@ -5,8 +5,33 @@ description = "Wrap a shm file so that the read-only partner can snapshot the fi
 version = "0.0.0"
 edition = "2021"
 
+[lib]
+
+[[bin]]
+name = "shm-restore"
+required-features = ["shm-restore"]
+
+[features]
+shm-restore = ["libc", "shm-fd", "tempfile", "clap"]
+
 [dependencies.memmap2]
 version = "0.9"
+
+# Dependency block for shm-restore, the reference implementation of a snapshot
+# host into a file on persistent file systems.
+[dependencies.libc]
+version = "0.2.109"
+optional = true
+[dependencies.shm-fd]
+path = "../shm-fd"
+optional = true
+[dependencies.tempfile]
+version = "3.8"
+optional = true
+[dependencies.clap]
+version = "4"
+features = ["derive"]
+optional = true
 
 [dev-dependencies.memfile]
 version = "0.3.1"
