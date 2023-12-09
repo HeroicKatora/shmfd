@@ -9,6 +9,11 @@ fn main() {
     };
 
     let (writer, last_prime) = restore_from(fd);
+    let interval = std::env::args()
+        .nth(1)
+        .map_or(1000, |num| {
+            num.parse().unwrap()
+        });
 
     const CHUNK: u64 = 100000;
     let mut chunk = 0..last_prime;
@@ -24,7 +29,7 @@ fn main() {
     for chunk in chunks.skip(1) {
         let put = &chunk.end.to_be_bytes();
         writer.write_with(put, |tx| run_main_routine(tx, chunk)).unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::thread::sleep(std::time::Duration::from_millis(interval));
     }
 }
 
