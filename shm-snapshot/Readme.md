@@ -1,5 +1,23 @@
 A memory-region that can be snapshot.
 
+## Try out
+
+```bash
+cargo build --release -p shm-fd \
+    -p shm-snapshot --features=shm-restore --bin shm-restore \
+    -p primes-snapshot
+
+./target/release/shm-fd \
+    ./target/release/shm-restore --snapshot=restore-v1 ./target/prime-snapshot \
+    ./target/release/primes-snapshot
+```
+
+The unique thing here is the ability to fully kill (`SIGKILL`) and restart the
+process tree, which will preserve most information while guaranteeing
+consistency of restored state. The snapshot modes are documented below, where
+the default of not using any mode results in performing snapshots only after
+termination of the child process and thus the weakest information preservation.
+
 ## Problem statement
 
 The library implements some basic inter-process strategies for synchronizing

@@ -4,7 +4,25 @@ A variant of `systemfd` opening a shared-memory file which is utilized to
 preserve state across runs of a program, coordinated by a watcher creating the
 original file and duplicating a file descriptor to its child.
 
-## Try it out
+## Library hierarchy
+
+- [`shm-fd`] is mostly a library/binary component to setup and consume a file
+  descriptor to a shared file, specifying the default transport by which it is
+  passed (i.e. the environment variable and how to interpret the setting).
+- [`shm-snapshot`] is an intermediate layer that provides persistent snapshot
+  backups of the state represented in the shared memory file. Its
+  `shm-restore` binary implements the client side of the `shm-snapshot`.
+- [`shm-state`] is a work-in-progress high-level library on top of the
+  restore/atomic journal mechanisms which aims to provide efficient data
+  structures in which a binary might keep state. These data structure should
+  provide all access characteristics of (immutable) memory data structures with
+  the snapshot persistence of the journaling.
+
+[`shm-fd`]: ./shm-fd/Readme.md
+[`shm-snapshot`]: ./shm-snapshot/Readme.md
+[`shm-state`]: ./shm-state/Readme.md
+
+## Try out the file mechanism
 
 There is a simple prime sieve example (like, Eratosthenes simplicity). It
 generates at most 1000 values each execution, filling up a share memory file of
@@ -17,21 +35,26 @@ cargo build --release -p shm-fd -p primes
 ./target/release/shm-fd watch -n 0.1 ./target/release/primes
 ```
 
-## Library hierarchy
+Here the `shm-fd` program opens the file and keeps it available, and watch
+loops the inner program repeatedly on that state.
 
-- `shm-fd` is mostly a library/binary component to setup and consume a file
-  descriptor to a shared file, specifying the default transport by which it is
-  passed (i.e. the environment variable and how to interpret the setting).
-- `shm-restore` is an intermediate layer that provides persistent snapshot
-  backups of the state represented in the shared memory file.
-- `shm-snapshot` implements the client side of the `shm-restore`. WIP: maybe we
-  should merge this with `shm-restore` since it provides two components of the
-  same concept and they must share at least layout of their mechanisms?
-- `shm-state` is a high-level library on top of the restore/atomic journal
-  mechanisms which aims to provide efficient data structures in which a binary
-  might keep state. These data structure should provide all access
-  characteristics of (immutable) memory data structures with the snapshot
-  persistence of the journaling.
+## Try out snapshot & restore
+
+The snapshot&restore mechanism is also demonstrated with a prime sieve program.
+It generates a throughput limited stream of values while running. The wrapper
+ensures that data is reloaded and persisted at start and end of the process.
+
+```bash
+cargo build --release -p shm-fd \
+    -p shm-snapshot --features=shm-restore --bin shm-restore \
+    -p primes-snapshot
+
+./target/release/shm-fd \
+    ./target/release/shm-restore ./target/prime-snapshot \
+    ./target/release/primes-snapshot
+```
+
+See [`shm-snapshot`] for more information on continuous consistent snapshots.
 
 ## shm-restore
 
