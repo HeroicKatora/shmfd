@@ -56,30 +56,13 @@ cargo build --release -p shm-fd \
 
 See [`shm-snapshot`] for more information on continuous consistent snapshots.
 
-## shm-restore
+## Repository structure
 
-Lightweight Checkpoint and Restore for shm-fd programs. Writes `shm-fd` data to
-a backing file and restores such data before running the actual program. In
-particular catches `SIGTERM`. This allows it to persist data transparently
-across (system) restarts.
-
-Example:
-
-```bash
-cargo build --release -p shm-fd -p shm-restore -p primes
-./target/release/shm-fd ./target/release/shm-restore ./target/prime-snapshot ./target/release/primes
-./target/release/shm-fd ./target/release/shm-restore ./target/prime-snapshot ./target/release/primes
-hexdump ./target/prime-shapshot
-```
-
-Or, to test the Strg+C (SIGINT) way of interrupting:
-
-```bash
-cargo build --release -p shm-fd -p shm-restore -p primes
-./target/release/shm-fd ./target/release/shm-restore ./target/prime-snapshot watch -n 0.1 ./target/release/primes
-^C
-hexdump ./target/prime-shapshot
-```
+Multiple packages are grouped in one workspace here, all related to the
+functionality. However, the tests are in their own separate workspace. This
+avoids dependencies populating too much. Integration or unit tests are not
+feasible for the core invariants since they require coordination among
+processes.
 
 ## shm-state
 
