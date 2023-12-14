@@ -1,0 +1,14 @@
+[package]
+name = "executables"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies.shm-fd]
+path = "../../shm-fd"
+artifact = ["bin:shm-fd"]
+features = ["memfile"]
+
+[dependencies.shm-snapshot]
+path = "../../shm-snapshot"
+artifact = ["bin:shm-restore"]
+features = ["shm-restore"]

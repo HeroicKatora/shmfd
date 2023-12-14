@@ -17,6 +17,7 @@ path = "src/lib.rs"
 [[bin]]
 path = "src/main.rs"
 name = "shm-fd"
+required-features = ["memfile"]
 
 [dependencies]
 libc = "0.2.109"

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "executables",
   "restore-v1",
 ]
 resolver = "2"
