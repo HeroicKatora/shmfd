@@ -1,0 +1,9 @@
+[package]
+name = "shmfd-test-validate"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+assert_cmd = "2.0.12"
+libc = "0.2.109"
+memfile = "0.2.1"

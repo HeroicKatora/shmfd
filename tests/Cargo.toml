@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "executables",
+  "validate",
   "restore-v1",
 ]
 resolver = "2"
