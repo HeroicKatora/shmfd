@@ -68,18 +68,31 @@ impl Writer {
     /// Insert some data into the atomic log of the shared memory.
     ///
     /// This also invokes a function before committing the data.
-    pub fn write_with(
+    pub fn write_with<T>(
         &mut self,
         data: &[u8],
-        intermediate: impl FnOnce(PreparedTransaction) -> bool
-    ) -> Result<Commit, CommitError> {
+        intermediate: impl FnOnce(PreparedTransaction) -> Option<T>
+    ) -> Result<(Commit, T), CommitError> {
         let mut dropped = Some(intermediate);
+        let mut result = None;
+        let ref mut result_ref = result;
+
         let mut intermediate = move |tx: PreparedTransaction<'_>| {
-            dropped.take().map_or(false, |fn_| fn_(tx))
+            dropped.take().map_or(false, |fn_| {
+                if let Some(val) = fn_(tx) {
+                    *result_ref = Some(val);
+                    true
+                } else {
+                    false
+                }
+            })
         };
 
         match self.head.write_with(data, &mut intermediate)  {
-            Ok(entry) => Ok(Commit { entry }),
+            Ok(entry) => {
+                let val = result.expect("written when returning `true`");
+                Ok((Commit { entry }, val))
+            },
             Err(_) => Err(CommitError { _inner: () })
         }
     }

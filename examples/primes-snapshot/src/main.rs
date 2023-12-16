@@ -8,15 +8,23 @@ fn main() {
         panic!("No shared memory state found");
     };
 
-    let (writer, last_prime) = restore_from(fd);
+    let (writer, mut state) = restore_from(fd);
     let interval = std::env::args()
         .nth(1)
         .map_or(1000, |num| {
             num.parse().unwrap()
         });
 
+    let limit = std::env::args_os()
+        .nth(2)
+        .and_then(|os| -> Option<u64> {
+            let arg = os.as_os_str().to_str()?;
+            arg.parse().ok()
+        })
+        .unwrap_or(u64::MAX);
+
     const CHUNK: u64 = 100000;
-    let mut chunk = 0..last_prime;
+    let mut chunk = 0..state.prime_last;
     let chunks = core::iter::from_fn(move || {
         let ret_chunk = chunk.clone();
         let new_end = chunk.end + CHUNK;
@@ -27,14 +35,27 @@ fn main() {
 
     let mut writer = writer;
     for chunk in chunks.skip(1) {
+        if state.prime_total > limit {
+            break;
+        }
+
         let put = &chunk.end.to_be_bytes();
-        writer.write_with(put, |tx| run_main_routine(tx, chunk)).unwrap();
+        let (_, new_state) = writer.write_with(put, |tx| run_main_routine(tx, chunk)).unwrap();
+        state = new_state;
+
         std::thread::sleep(std::time::Duration::from_millis(interval));
     }
 }
 
+struct State {
+    prime_total: u64,
+    prime_last: u64,
+}
+
 /// A very simple prime sieve..
-fn run_main_routine(mut tx: PreparedTransaction<'_>, num_range: core::ops::Range<u64>) -> bool {
+fn run_main_routine(mut tx: PreparedTransaction<'_>, num_range: core::ops::Range<u64>)
+    -> Option<State>
+{
     let values = tx.tail();
 
     if values[0].load(Ordering::Relaxed) == 0 {
@@ -56,7 +77,7 @@ fn run_main_routine(mut tx: PreparedTransaction<'_>, num_range: core::ops::Range
     if pos >= values.len() {
         println!("No more primes to fill");
         eprintln!("{:?}", &values[..]);
-        return false;
+        return None;
     }
 
     for candidate in num_range {
@@ -74,7 +95,10 @@ fn run_main_routine(mut tx: PreparedTransaction<'_>, num_range: core::ops::Range
     let post_place: u64 = pos as u64;
     tx.replace(&post_place.to_be_bytes());
     eprintln!("generated {} more primes, total {}", num, post_place);
-    true
+    Some(State {
+        prime_total: post_place,
+        prime_last: values[pos as usize].load(Ordering::Relaxed),
+    })
 }
 
 fn check_prime(num: u64, primes: &[AtomicU64]) -> bool {
@@ -114,7 +138,7 @@ fn upper_int_sqrt(num: u64) -> u64 {
     r
 }
 
-fn restore_from(fd: SharedFd) -> (Writer, u64) {
+fn restore_from(fd: SharedFd) -> (Writer, State) {
     struct ExtendWith<F>(F);
 
     impl<F> Extend<Snapshot> for ExtendWith<F>
@@ -149,7 +173,7 @@ fn restore_from(fd: SharedFd) -> (Writer, u64) {
     });
 
     let writer = mapping.configure(&config);
-    let prime_count = if let Some(latest_snapshot) = latest_snapshot {
+    let prime_total = if let Some(latest_snapshot) = latest_snapshot {
         let mut buffer = [0; 8];
         writer.read(&latest_snapshot, &mut buffer);
         u64::from_be_bytes(buffer)
@@ -157,18 +181,23 @@ fn restore_from(fd: SharedFd) -> (Writer, u64) {
         0
     };
 
-    eprintln!("Recovering {prime_count} existing primes");
-    let (retain, scratch) = writer.tail().split_at(prime_count as usize);
+    eprintln!("Recovering {prime_total} existing primes");
+    let (retain, scratch) = writer.tail().split_at(prime_total as usize);
 
-    let last_prime = if let Some(last_prime) = retain.last() {
+    let prime_last = if let Some(prime_last) = retain.last() {
         for item in scratch {
             item.store(0, Ordering::Relaxed);
         }
 
-        last_prime.load(Ordering::Relaxed)
+        prime_last.load(Ordering::Relaxed)
     } else {
         2
     };
 
-    (writer, last_prime)
+    let state = State {
+        prime_last,
+        prime_total,
+    };
+
+    (writer, state)
 }
