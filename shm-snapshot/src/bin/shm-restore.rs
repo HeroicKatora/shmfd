@@ -225,7 +225,7 @@ fn file_with_parent(file: &OsStr) -> Option<FileWithParent<'_>> {
 
 fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), std::io::Error> {
     let FileWithParent(backup_path, parent) = backup;
-    let mut snapshot = shm_snapshot::File::new(dropped.write_back.shm)?;
+    let snapshot = shm_snapshot::File::new(dropped.write_back.shm)?;
 
     let mut pre_valid = HashSet::new();
     let mut pre_cfg = shm_snapshot::ConfigureFile::default();

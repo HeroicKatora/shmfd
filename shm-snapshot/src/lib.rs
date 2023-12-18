@@ -32,7 +32,7 @@ impl File {
     /// This method writes the read information into the output argument `cfg` and returns a proxy
     /// with the recovered configuration. The proxy can be used to partially access the contained
     /// entries as well, if the discovery succeeded.
-    pub fn recover(&mut self, cfg: &mut ConfigureFile) -> Option<FileDiscovery<'_>> {
+    pub fn recover(&self, cfg: &mut ConfigureFile) -> Option<FileDiscovery<'_>> {
         self.head.discover(cfg);
 
         if !cfg.is_initialized() {

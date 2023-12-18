@@ -153,7 +153,7 @@ fn restore_from(fd: SharedFd) -> (Writer, State) {
 
     let file = fd.into_file().expect("opening shared fd failed");
     let _ = file.set_len(100_000_000u64);
-    let mut mapping = File::new(file).unwrap();
+    let mapping = File::new(file).unwrap();
     let mut config = ConfigureFile::default();
 
     let mut latest_snapshot = None;

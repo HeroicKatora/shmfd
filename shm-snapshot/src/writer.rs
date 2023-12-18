@@ -101,7 +101,7 @@ impl Head {
         HIGEST_BIT_SET >> value.leading_zeros()
     }
 
-    pub(crate) fn discover(&mut self, cfg: &mut ConfigureFile) {
+    pub(crate) fn discover(&self, cfg: &mut ConfigureFile) {
         let entry_mask = self.head.meta.entry_mask.load(Ordering::Relaxed);
         let data_mask = self.head.meta.page_mask.load(Ordering::Relaxed);
         let page_write_offset = self.head.meta.page_write_offset.load(Ordering::Relaxed);
