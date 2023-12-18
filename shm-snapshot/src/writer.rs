@@ -13,12 +13,17 @@ pub struct File {
     pub(crate) head: Head,
 }
 
+pub struct FileDiscovery<'lt> {
+    pub(crate) file: &'lt File,
+    pub(crate) configuration: ConfigureFile,
+}
+
 #[derive(Default, Debug)]
 pub struct ConfigureFile {
     pub entries: u64,
     pub data: u64,
     pub initial_offset: u64,
-    layout_version: u64,
+    pub(crate) layout_version: u64,
 }
 
 pub struct Head {
@@ -122,17 +127,36 @@ impl Head {
     }
 
     pub(crate) fn configure(&mut self, cfg: &ConfigureFile) {
+        Self::configure_head(&mut self.head, cfg)
+    }
+
+    fn configure_head(head: &mut WriteHead, cfg: &ConfigureFile) {
         assert!(cfg.entries.next_power_of_two() == cfg.entries);
         assert!(cfg.data.next_power_of_two() == cfg.data);
+        assert!(cfg.is_initialized());
 
-        self.head.pre_configure_entries(cfg.entries);
-        self.head.pre_configure_pages(cfg.data);
-        self.head.pre_configure_write(cfg.initial_offset);
-        self.head.configure_pages();
+        head.pre_configure_entries(cfg.entries);
+        head.pre_configure_pages(cfg.data);
+        head.pre_configure_write(cfg.initial_offset);
+        head.configure_pages();
     }
 
     #[inline(always)]
     pub(crate) fn valid(&self, into: &mut impl Extend<Snapshot>) {
+        Self::valid_in_head(&self.head, into)
+    }
+
+    pub(crate) fn valid_at(&self, into: &mut impl Extend<Snapshot>, cfg: &ConfigureFile) {
+        let mut alternate_head = WriteHead {
+            cache: HeadCache { ..self.head.cache },
+            ..self.head
+        };
+
+        Self::configure_head(&mut alternate_head, cfg);
+        Self::valid_in_head(&alternate_head, into);
+    }
+
+    fn valid_in_head(head: &WriteHead, into: &mut impl Extend<Snapshot>) {
         struct Collector<T>(T);
 
         impl<T, V> Collect<T> for Collector<&'_ mut V>
@@ -145,11 +169,21 @@ impl Head {
         }
 
         // Relaxed ordering is enough since we're the only reader still.
-        self.head.iter_valid(&mut Collector(into), Ordering::Relaxed);
+        head.iter_valid(&mut Collector(into), Ordering::Relaxed);
     }
 
     pub(crate) fn read(&self, snapshot: &Snapshot, into: &mut [u8]) {
         self.head.read(snapshot, into);
+    }
+
+    pub(crate) fn read_at(&self, snapshot: &Snapshot, into: &mut [u8], cfg: &ConfigureFile) {
+        let mut alternate_head = WriteHead {
+            cache: HeadCache { ..self.head.cache },
+            ..self.head
+        };
+
+        Self::configure_head(&mut alternate_head, cfg);
+        alternate_head.read(snapshot, into);
     }
 
     /// Construct this wrapper

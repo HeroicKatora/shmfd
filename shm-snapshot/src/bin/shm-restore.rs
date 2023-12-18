@@ -225,10 +225,13 @@ fn file_with_parent(file: &OsStr) -> Option<FileWithParent<'_>> {
 
 fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), std::io::Error> {
     let FileWithParent(backup_path, parent) = backup;
-    let snapshot = shm_snapshot::File::new(dropped.write_back.shm)?;
+    let mut snapshot = shm_snapshot::File::new(dropped.write_back.shm)?;
 
     let mut pre_valid = HashSet::new();
-    snapshot.valid(&mut pre_valid);
+    let mut pre_cfg = shm_snapshot::ConfigureFile::default();
+    if let Some(recovery) = snapshot.recover(&mut pre_cfg) {
+        recovery.valid(&mut pre_valid);
+    }
 
     // Detect which portions stayed immutable by collecting the assertions twice. Once before we
     // write the file, and once afterwards. The entries which were active before certify that their
@@ -241,7 +244,9 @@ fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), s
 
     // We then check if the backup file contains any successful data transaction.
     let mut post_valid = HashSet::new();
-    snapshot.valid(&mut post_valid);
+    if let Some(recovery) = snapshot.recover(&mut pre_cfg) {
+        recovery.valid(&mut post_valid);
+    }
 
     // And now we must mask from the backup file all entries that we can not prove are valid. If
     // there are any remaining entries, this backup was successful.

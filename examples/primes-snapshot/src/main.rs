@@ -156,17 +156,18 @@ fn restore_from(fd: SharedFd) -> (Writer, State) {
     let mut mapping = File::new(file).unwrap();
     let mut config = ConfigureFile::default();
 
-    mapping.discover(&mut config);
-
     let mut latest_snapshot = None;
-    let mut restore_state = ExtendWith(|snapshot: Snapshot| {
-        latest_snapshot = std::cmp::max_by_key(
-                latest_snapshot, Some(snapshot),
-                |x: &Option<Snapshot>| x.map(|v| v.offset)
-            );
-    });
+    if let Some(mapping) = mapping.recover(&mut config) {
+        let mut restore_state = ExtendWith(|snapshot: Snapshot| {
+            latest_snapshot = std::cmp::max_by_key(
+                    latest_snapshot, Some(snapshot),
+                    |x: &Option<Snapshot>| x.map(|v| v.offset)
+                );
+        });
 
-    mapping.valid(&mut restore_state);
+        mapping.valid(&mut restore_state);
+    }
+
     config.or_insert_with(|cfg| {
         cfg.entries = 0x100;
         cfg.data = 0x800;

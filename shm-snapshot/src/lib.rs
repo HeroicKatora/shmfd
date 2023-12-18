@@ -2,7 +2,7 @@
 mod tests;
 mod writer;
 
-pub use writer::{ConfigureFile, File, PreparedTransaction, Snapshot, Writer};
+pub use writer::{ConfigureFile, File, FileDiscovery, PreparedTransaction, Snapshot, Writer};
 use writer::Head;
 
 use core::sync::atomic::AtomicU64;
@@ -27,21 +27,22 @@ impl File {
         Ok(File { head })
     }
 
-    #[inline(always)]
-    pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
-        self.head.valid(into)
-    }
+    /// Attempt to recover the configuration from existing data.
+    ///
+    /// This method writes the read information into the output argument `cfg` and returns a proxy
+    /// with the recovered configuration. The proxy can be used to partially access the contained
+    /// entries as well, if the discovery succeeded.
+    pub fn recover(&mut self, cfg: &mut ConfigureFile) -> Option<FileDiscovery<'_>> {
+        self.head.discover(cfg);
 
-    // FIXME: makes little sense. Reading data depends on our configuration, i.e. we need valid
-    // offsets and page masks here. But the `head` does not automatically use those of the file.
-    // Should we instead have a configuration to provide here which is used when valid? Or even
-    // load the one from the file, fresh? The same applies to `valid` however.
-    pub fn read(&self, snapshot: &Snapshot, buffer: &mut [u8]) {
-        self.head.read(snapshot, buffer)
-    }
+        if !cfg.is_initialized() {
+            return None;
+        }
 
-    pub fn discover(&mut self, cfg: &mut ConfigureFile) {
-        self.head.discover(cfg)
+        Some(FileDiscovery {
+            file: self,
+            configuration: ConfigureFile { ..*cfg },
+        })
     }
 
     pub fn configure(mut self, cfg: &ConfigureFile) -> Writer {
@@ -52,6 +53,26 @@ impl File {
     /// Convert this into a writer, without minding data consistency.
     pub fn into_writer_unguarded(self) -> Writer {
         Writer { head: self.head }
+    }
+}
+
+impl FileDiscovery<'_> {
+    // FIXME: makes little sense. Reading data depends on our configuration, i.e. we need valid
+    // offsets and page masks here. But the `head` does not automatically use those of the file.
+    // Should we instead have a configuration to provide here which is used when valid? Or even
+    // load the one from the file, fresh? The same applies to `valid` however.
+    pub fn read(&self, snapshot: &Snapshot, buffer: &mut [u8]) {
+        self.file.head.read_at(snapshot, buffer, &self.configuration)
+    }
+
+    /// Iteratively read all valid entries from the file.
+    ///
+    /// The order of reads is not determined. Internally we have a structure equivalent to a
+    /// VecDeque and are iterating in the order of the underlying raw slice, not the order of the
+    /// actual logical data layout.
+    #[inline(always)]
+    pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
+        self.file.head.valid_at(into, &self.configuration)
     }
 }
 
@@ -114,7 +135,8 @@ impl Writer {
 impl ConfigureFile {
     pub fn or_insert_with(&mut self, replace: impl FnOnce(&mut Self)) {
         if !self.is_initialized() {
-            replace(self)
+            replace(self);
+            self.layout_version = ConfigureFile::MAGIC_VERSION;
         }
     }
 }
