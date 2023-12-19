@@ -1,6 +1,6 @@
 [package]
 name = "shm-fd"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 authors = ["HeroicKatora"]
@@ -11,16 +11,20 @@ readme = "Readme.md"
 keywords = ["shm", "shared-memory", "systemfd", "listenfd", "shmfd"]
 categories = ["memory-management", "os::unix-apis"]
 
+[features]
+std = []
+
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
 path = "src/main.rs"
 name = "shm-fd"
-required-features = ["memfile"]
+required-features = ["libc", "memfile", "std"]
 
-[dependencies]
-libc = "0.2.109"
+[dependencies.libc]
+version = "0.2.109"
+optional = true
 [dependencies.memfile]
 version = "0.2.1"
 optional = true
