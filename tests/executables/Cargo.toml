@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies.shm-fd]
 path = "../../shm-fd"
 artifact = ["bin:shm-fd"]
-features = ["memfile"]
+features = ["libc", "memfile", "std"]
 
 [dependencies.shm-snapshot]
 path = "../../shm-snapshot"
