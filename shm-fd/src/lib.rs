@@ -4,6 +4,9 @@ use core::ffi::c_int as RawFd;
 extern crate alloc;
 
 pub mod op;
+mod listenfd;
+
+pub use listenfd::ListenFd;
 
 /// A raw file descriptor, opened for us by the environment.
 ///
@@ -18,16 +21,24 @@ impl SharedFd {
     /// # Safety
     /// Caller asserts that the environment variable has been set to a file descriptor that is not
     /// owned by any other resource.
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "std", feature = "libc"))]
     pub unsafe fn from_env() -> Option<Self> {
-        let var = std::env::var_os("SHM_SHARED_FDS")?;
-        Self::from_var(var.to_str()?)
+        let listen = ListenFd::new()?.ok()?;
+        Self::from_listen(&listen)
     }
 
     /// Import a shared file descriptor based on the contents that would be in the environment variable `SHM_SHARED_FDS`.
-    pub unsafe fn from_var(var: &str) -> Option<Self> {
-        let num = var.split(',').next()?;
-        let fd: RawFd = num.parse().ok()?;
+    #[cfg(all(feature = "libc"))]
+    unsafe fn from_listen(var: &ListenFd) -> Option<Self> {
+        let num = var.names.iter().position(|v|v == "SHM_SHARED_FD")?;
+        let fd: RawFd = var.fd_base + num as RawFd;
+
+        let mut statbuf = unsafe { core::mem::zeroed::<libc::stat>() };
+        if -1 == unsafe { libc::fstat(fd, &mut statbuf) } {
+            // FIXME: Report that error?
+            return None;
+        }
+
         Some(SharedFd { fd })
     }
 

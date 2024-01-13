@@ -1,17 +1,23 @@
 //! Interact with the Systemd notify socket.
 use std::env;
+use std::ffi::OsString;
 use std::os::fd::RawFd;
 
 pub struct NotifyFd {
     fd: RawFd,
 }
 
+// https://github.com/systemd/systemd/blob/414ae39821f0c103b076fc5f7432f827e0e79765/src/libsystemd/sd-daemon/sd-daemon.c#L454-L598
 impl NotifyFd {
-    pub fn from_env(name: &str) -> Result<Option<Self>, std::io::Error> {
-        let Some(addr) = env::var_os(name) else {
+    pub fn new() -> Result<Option<Self>, std::io::Error> {
+        let Some(addr) = env::var_os("NOTIFY_SOCKET") else {
             return Ok(None);
         };
 
+        Self::from_env(addr).map(Some)
+    }
+
+    pub fn from_env(name: OsString) -> Result<Self, std::io::Error> {
         todo!()
     }
 
@@ -30,12 +36,14 @@ impl NotifyFd {
         state: &str,
         fds: &[RawFd]
     ) -> Result<(), std::io::Error> {
+        let mut hdr: libc::msghdr = unsafe { core::mem::zeroed::<libc::msghdr>() };
+
         todo!()
     }
 }
 
 impl Drop for NotifyFd {
     fn drop(&mut self) {
-        unsafe { libc::close(self.fd) }
+        let _ = unsafe { libc::close(self.fd) };
     }
 }
