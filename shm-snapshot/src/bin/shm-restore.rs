@@ -1,7 +1,13 @@
 use std::collections::HashSet;
-use std::os::unix::{fs::OpenOptionsExt, io::AsRawFd, io::RawFd, io::IntoRawFd};
 use std::ffi::{OsString, OsStr};
 use std::{fs::OpenOptions, process, path::Path};
+use std::os::unix::{
+    fs::OpenOptionsExt,
+    io::AsRawFd,
+    io::RawFd,
+    io::IntoRawFd,
+    process::CommandExt
+};
 
 
 use memmap2::MmapRaw;
@@ -36,6 +42,25 @@ fn main() {
 
     let mut proc = process::Command::new(command);
     proc.args(&args);
+
+    if std::env::var_os("LISTEN_PID").is_some() {
+        unsafe {
+            proc.pre_exec(|| {
+                let pid = format!("{}\0", libc::getpid());
+                static LISTEN_PID: &[u8] = b"LISTEN_PID\0";
+
+                if -1 == libc::setenv(
+                    LISTEN_PID.as_ptr() as *const _,
+                    pid.as_ptr() as *const _,
+                    1 /* overwrite */,
+                ) {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                Ok(())
+            });
+        }
+    }
 
     unsafe { fcntl_cloexec(duped_shmfd.as_raw_fd()).expect("failed to set close-on-exec") };
     unsafe { fcntl_cloexec(backup_file.as_raw_fd()).expect("failed to set close-on-exec") };

@@ -12,7 +12,14 @@ name = "shm-restore"
 required-features = ["shm-restore"]
 
 [features]
-shm-restore = ["libc", "shm-fd", "tempfile", "clap"]
+shm-restore = [
+  "libc",
+  "shm-fd",
+  "shm-fd/libc",
+  "shm-fd/std",
+  "tempfile",
+  "clap",
+]
 
 [dependencies.memmap2]
 version = "0.9"
