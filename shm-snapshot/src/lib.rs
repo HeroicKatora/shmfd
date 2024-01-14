@@ -16,6 +16,22 @@ pub struct Commit {
     entry: u64,
 }
 
+pub trait RetainSnapshot {
+    fn contains(&self, snapshot: &Snapshot) -> bool;
+}
+
+impl RetainSnapshot for std::collections::HashSet<Snapshot> {
+    fn contains(&self, snapshot: &Snapshot) -> bool {
+        self.contains(snapshot)
+    }
+}
+
+impl RetainSnapshot for Vec<Snapshot> {
+    fn contains(&self, snapshot: &Snapshot) -> bool {
+        self.iter().position(|x| x == snapshot).is_some()
+    }
+}
+
 pub struct CommitError {
     _inner: (),
 }
@@ -73,6 +89,14 @@ impl FileDiscovery<'_> {
     #[inline(always)]
     pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
         self.file.head.valid_at(into, &self.configuration)
+    }
+
+    /// Invalidate some entries, as determined by the retained configuration.
+    ///
+    /// For instance, delete snapshots which are known to have been potentially invalidated by
+    /// modifications into the covered memory.
+    pub fn retain(&self, retain: &dyn RetainSnapshot) {
+        self.file.head.retain_at(retain, &self.configuration);
     }
 }
 

@@ -41,12 +41,13 @@ pub struct Snapshot {
 }
 
 pub(crate) trait Collect<T> {
-    fn insert_one(&mut self, _: T);
+    fn insert_one(&mut self, _: T) -> bool;
 }
 
 impl<T> Collect<T> for Vec<T> {
-    fn insert_one(&mut self, val: T) {
-        self.push(val)
+    fn insert_one(&mut self, val: T) -> bool {
+        self.push(val);
+        true
     }
 }
 
@@ -156,6 +157,16 @@ impl Head {
         Self::valid_in_head(&alternate_head, into);
     }
 
+    pub(crate) fn retain_at(&self, retain: &dyn super::RetainSnapshot, cfg: &ConfigureFile) {
+        let mut alternate_head = WriteHead {
+            cache: HeadCache { ..self.head.cache },
+            ..self.head
+        };
+
+        Self::configure_head(&mut alternate_head, cfg);
+        Self::retain_in_head(&alternate_head, retain);
+    }
+
     fn valid_in_head(head: &WriteHead, into: &mut impl Extend<Snapshot>) {
         struct Collector<T>(T);
 
@@ -163,13 +174,26 @@ impl Head {
         where
             V: Extend<T>
         {
-            fn insert_one(&mut self, val: T) {
+            fn insert_one(&mut self, val: T) -> bool {
                 self.0.extend(core::iter::once(val));
+                true
             }
         }
 
         // Relaxed ordering is enough since we're the only reader still.
         head.iter_valid(&mut Collector(into), Ordering::Relaxed);
+    }
+
+    fn retain_in_head(head: &WriteHead, into: &dyn super::RetainSnapshot) {
+        struct Retain<'lt>(&'lt dyn super::RetainSnapshot);
+
+        impl Collect<Snapshot> for Retain<'_> {
+            fn insert_one(&mut self, val: Snapshot) -> bool {
+                self.0.contains(&val)
+            }
+        }
+
+        head.iter_valid(&mut Retain(into), Ordering::Relaxed);
     }
 
     pub(crate) fn read(&self, snapshot: &Snapshot, into: &mut [u8]) {
@@ -367,10 +391,12 @@ impl WriteHead {
                 continue;
             }
 
-            extend.insert_one(Snapshot {
+            if !extend.insert_one(Snapshot {
                 length,
                 offset: seq.offset.load(ordering),
-            });
+            }) {
+                seq.length.store(0, ordering);
+            }
         }
     }
 
