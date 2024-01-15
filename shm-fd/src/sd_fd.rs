@@ -1,7 +1,9 @@
 //! Interact with the Systemd notify socket.
 use std::env;
-use std::ffi::OsString;
-use std::os::fd::RawFd;
+use std::ffi::{OsString, OsStr};
+use std::os::fd::{RawFd, IntoRawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::UnixDatagram;
 
 pub struct NotifyFd {
     fd: RawFd,
@@ -18,7 +20,28 @@ impl NotifyFd {
     }
 
     pub fn from_env(name: OsString) -> Result<Self, std::io::Error> {
-        todo!()
+        let ty = name.as_encoded_bytes().get(0).cloned();
+
+        let name_bytes = match ty {
+            Some(b'/') => {
+                eprintln!("Path: {:?}", name);
+                name.as_encoded_bytes()
+            }
+            Some(b'@') => {
+                eprintln!("Anon: {:?}", name);
+                &name.as_encoded_bytes()[1..]
+            },
+            _ => return Err(std::io::ErrorKind::Unsupported)?,
+        };
+
+
+        let name = OsStr::from_bytes(name_bytes);
+        let dgram_socket = UnixDatagram::unbound()?;
+        dgram_socket.connect(name)?;
+
+        Ok(NotifyFd {
+            fd: dgram_socket.into_raw_fd(),
+        })
     }
 
     // Consume the notify fd to send a FD notification.
@@ -37,8 +60,64 @@ impl NotifyFd {
         fds: &[RawFd]
     ) -> Result<(), std::io::Error> {
         let mut hdr: libc::msghdr = unsafe { core::mem::zeroed::<libc::msghdr>() };
+        let mut iov: libc::iovec = unsafe { core::mem::zeroed::<libc::iovec>() };
 
-        todo!()
+        iov.iov_base = state.as_ptr() as *mut libc::c_void;
+        iov.iov_len = state.len();
+
+        hdr.msg_iov = &mut iov;
+        hdr.msg_iovlen = 1;
+        hdr.msg_name;
+
+        // No send_ucred yet, hence
+        let len = u32::try_from(core::mem::size_of_val(fds))
+            .expect("user error");
+        let len = if len > 0 {
+            (unsafe { libc::CMSG_SPACE(len) } as usize)
+        } else { 0 };
+
+        let mut buf = vec![0; len];
+
+        hdr.msg_controllen = len;
+        hdr.msg_control = buf.as_mut_ptr() as *mut libc::c_void;
+
+        if len > 0 {
+            let cmsg = unsafe { libc::CMSG_FIRSTHDR(&hdr) };
+            let cmsg = unsafe { &mut *cmsg };
+            let msg_len = core::mem::size_of_val(fds);
+
+            cmsg.cmsg_level = libc::SOL_SOCKET;
+            cmsg.cmsg_type = libc::SCM_RIGHTS;
+            cmsg.cmsg_len = unsafe { libc::CMSG_LEN(msg_len as u32) } as usize;
+
+            assert!(cmsg.cmsg_len >= msg_len);
+            let data = unsafe { libc::CMSG_DATA(cmsg) };
+
+            // Safety: Pointer `data` is part of the buffer, by libc::CMSG_DATA.
+            // Then fds is a pointer to an integer slice, always initialized.
+            // Then the message length is the number of bytes in the slice.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    fds.as_ptr() as *const _ as *const u8,
+                    data,
+                    msg_len,
+                );
+            }
+        }
+
+        let sent = unsafe {
+            libc::sendmsg(self.fd, &hdr, libc::MSG_NOSIGNAL)
+        };
+
+        if -1 == sent {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        if sent as usize != state.len() {
+            return Err(std::io::ErrorKind::InvalidData)?;
+        }
+
+        Ok(())
     }
 }
 

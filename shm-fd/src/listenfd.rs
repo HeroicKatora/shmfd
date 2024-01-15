@@ -22,6 +22,13 @@ pub enum Error {
 impl ListenFd {
     #[cfg(all(feature = "std", feature = "libc"))]
     pub fn new() -> Option<Result<Self, Error>> {
+        eprintln!(
+            "{:?} {:?} {:?}",
+            std::env::var_os("LISTEN_FDS"),
+            std::env::var_os("LISTEN_PID"),
+            std::env::var_os("LISTEN_FDNAMES"),
+        );
+
         let Some(count) = std::env::var_os("LISTEN_FDS") else {
             return None;
         };
