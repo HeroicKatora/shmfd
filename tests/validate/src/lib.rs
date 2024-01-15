@@ -6,6 +6,7 @@ use memfile::MemFile;
 
 pub struct Env {
     file: MemFile,
+    #[allow(dead_code)]
     placeholder: RawFd,
 }
 
@@ -13,6 +14,8 @@ impl Env {
     pub fn new() -> Self {
         let placeholder =
             MemFile::create_default("placeholder").expect("failed to initialized shm-file");
+        assert_eq!(placeholder.as_raw_fd(), 3);
+
         let file = MemFile::create_sealable("persistent").expect("failed to initialized shm-file");
         Env {
             file,
