@@ -1,0 +1,9 @@
+[Unit]
+Description=Demonstrate the statefulness of SHM-FD
+
+[Service]
+FileDescriptorStoreMax=1
+FileDescriptorStorePreserve=yes
+ExecStart="${SHMFD}/target/release/shm-fd" "${SHMFD}/target/release/shm-restore" "${SHMFD}/prime-snapshot" "${SHMFD}/target/release/primes"
+Type=oneshot
+RemainAfterExit=yes

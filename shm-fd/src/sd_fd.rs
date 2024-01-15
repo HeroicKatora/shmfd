@@ -7,6 +7,7 @@ use std::os::unix::net::UnixDatagram;
 
 pub struct NotifyFd {
     fd: RawFd,
+    addr: Vec<libc::c_char>,
 }
 
 // https://github.com/systemd/systemd/blob/414ae39821f0c103b076fc5f7432f827e0e79765/src/libsystemd/sd-daemon/sd-daemon.c#L454-L598
@@ -41,6 +42,7 @@ impl NotifyFd {
 
         Ok(NotifyFd {
             fd: dgram_socket.into_raw_fd(),
+            addr: name_bytes.iter().map(|&b| b as libc::c_char).collect(),
         })
     }
 
@@ -61,13 +63,19 @@ impl NotifyFd {
     ) -> Result<(), std::io::Error> {
         let mut hdr: libc::msghdr = unsafe { core::mem::zeroed::<libc::msghdr>() };
         let mut iov: libc::iovec = unsafe { core::mem::zeroed::<libc::iovec>() };
+        let mut addr: libc::sockaddr_un = unsafe { core::mem::zeroed::<libc::sockaddr_un>() };
 
         iov.iov_base = state.as_ptr() as *mut libc::c_void;
         iov.iov_len = state.len();
 
+        addr.sun_family = libc::AF_UNIX as libc::c_ushort;
+        let addr_len = addr.sun_path.len().min(self.addr.len());
+        addr.sun_path[..addr_len].copy_from_slice(&self.addr[..addr_len]);
+
         hdr.msg_iov = &mut iov;
         hdr.msg_iovlen = 1;
-        hdr.msg_name;
+        hdr.msg_namelen = core::mem::size_of_val(&addr) as libc::c_uint;
+        hdr.msg_name = &mut addr as *mut _ as *mut libc::c_void;
 
         // No send_ucred yet, hence
         let len = u32::try_from(core::mem::size_of_val(fds))

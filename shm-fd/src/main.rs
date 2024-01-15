@@ -60,7 +60,7 @@ fn main() {
         if let Some(notify) = notify_sd {
             // If we created a new file descriptor, pass it to systemd.
             eprintln!("Passing new file {rawfd}:{fd_name} to environment");
-            let state = format!("FDSTORE=1\nFDNAME={fd_name}\0");
+            let state = format!("FDSTORE=1\nFDNAME={fd_name}");
             notify.notify_with_fds(&state, core::slice::from_ref(&rawfd))
                 .expect("failed to setup socket store");
         }
