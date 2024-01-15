@@ -267,14 +267,25 @@ fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), s
     let pending = tempfile::NamedTempFile::new_in(parent)?;
     (dropped.how)(dropped.write_back.shm, pending.as_raw_fd());
 
+    // And now we must mask from the backup file all entries that we can not prove are valid. If
+    // there are any remaining entries, this backup was successful.
+    //
     // We then check if the backup file contains any successful data transaction.
     let mut post_valid = HashSet::new();
-    if let Some(recovery) = snapshot.recover(&mut pre_cfg) {
+    let post_snapshot = shm_snapshot::File::new(pending.as_raw_fd())?;
+    if let Some(recovery) = post_snapshot.recover(&mut pre_cfg) {
+        // First mark all change entries invalid.
+        recovery.retain(&pre_valid);
+
+        // Then collect all remaining live entries.
         recovery.valid(&mut post_valid);
     }
 
-    // And now we must mask from the backup file all entries that we can not prove are valid. If
-    // there are any remaining entries, this backup was successful.
+    if post_valid.is_empty() {
+        // No progress was made, no entry successfully persisted.
+        return Ok(());
+    }
+
     // FIXME: this is not yet implemented, i.e. we have wrong backup files with entries that have
     // not correctly sandwiched the immutable time interval of their data.
 
