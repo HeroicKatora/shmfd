@@ -11,9 +11,9 @@ pub struct Env {
 
 impl Env {
     pub fn new() -> Self {
-        let file = MemFile::create_sealable("persistent").expect("failed to initialized shm-file");
         let placeholder =
             MemFile::create_default("placeholder").expect("failed to initialized shm-file");
+        let file = MemFile::create_sealable("persistent").expect("failed to initialized shm-file");
         Env {
             file,
             placeholder: placeholder.into_raw_fd(),
@@ -24,16 +24,16 @@ impl Env {
     ///
     /// Note: for safety reasons we must at least spawn the process before returning.
     pub fn shared_fd(&self, mut cmd: std::process::Command) -> Assert {
-        cmd.env("SHM_SHARED_FDS", format!("{}", self.placeholder));
+        cmd.env("LISTEN_FDS", 1.to_string());
+        cmd.env("LISTEN_FDNAMES", "SHM_SHARED_FD");
 
         // We borrow from `self` but the process is started before we return, executing the
         // pre_exec hook as well.
         unsafe {
             let raw_fd = self.file.as_raw_fd();
-            let placeholder = self.placeholder;
 
             cmd.pre_exec(move || {
-                if -1 == libc::dup2(raw_fd, placeholder) {
+                if -1 == libc::dup2(raw_fd, 3) {
                     panic!("Failed to dup file descriptor pre-exec");
                 } else {
                     Ok(())
