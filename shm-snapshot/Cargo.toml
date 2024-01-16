@@ -2,7 +2,7 @@
 name = "shm-snapshot"
 description = "Wrap a shm file so that the read-only partner can snapshot the file partially without explicit synchronization"
 
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 
 [lib]
