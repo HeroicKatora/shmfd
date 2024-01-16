@@ -4,6 +4,6 @@ Description=Demonstrate the statefulness of SHM-FD
 [Service]
 FileDescriptorStoreMax=1
 FileDescriptorStorePreserve=yes
-ExecStart="${SHMFD}/target/release/shm-fd" "${SHMFD}/target/release/shm-restore" "${SHMFD}/target/fprimes" "${SHMFD}/target/release/primes"
+ExecStart="${SHMFD}/target/release/shm-fd" "${SHMFD}/target/release/primes"
 Type=oneshot
 RemainAfterExit=yes

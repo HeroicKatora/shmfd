@@ -4,25 +4,15 @@ A variant of `systemfd` opening a shared-memory file which is utilized to
 preserve state across runs of a program, coordinated by a watcher creating the
 original file and duplicating a file descriptor to its child.
 
-## Library hierarchy
+## Integration with systemd
 
-- [`shm-fd`] is mostly a library/binary component to setup and consume a file
-  descriptor to a shared file, specifying the default transport by which it is
-  passed (i.e. the environment variable and how to interpret the setting).
-- [`shm-snapshot`] is an intermediate layer that provides persistent snapshot
-  backups of the state represented in the shared memory file. Its
-  `shm-restore` binary implements the client side of the `shm-snapshot`.
-- [`shm-state`] is a work-in-progress high-level library on top of the
-  restore/atomic journal mechanisms which aims to provide efficient data
-  structures in which a binary might keep state. These data structure should
-  provide all access characteristics of (immutable) memory data structures with
-  the snapshot persistence of the journaling.
+This library interacts with systemd's File Descriptor store. This automates a
+lot of the instructions below more conveniently. See [docs/systemd.md] for more
+details and a guide of ready-to-bash scripts.
 
-[`shm-fd`]: ./shm-fd/Readme.md
-[`shm-snapshot`]: ./shm-snapshot/Readme.md
-[`shm-state`]: ./shm-state/Readme.md
+[docs/systemd.md]: ./docs/systemd.md
 
-## Try out the file mechanism
+## Try out the file mechanism, standalone
 
 There is a simple prime sieve example (like, Eratosthenes simplicity). It
 generates at most 1000 values each execution, filling up a share memory file of
@@ -56,6 +46,24 @@ cargo build --release \
 ```
 
 See [`shm-snapshot`] for more information on continuous consistent snapshots.
+
+## Library hierarchy
+
+- [`shm-fd`] is mostly a library/binary component to setup and consume a file
+  descriptor to a shared file, specifying the default transport by which it is
+  passed (i.e. the environment variable and how to interpret the setting).
+- [`shm-snapshot`] is an intermediate layer that provides persistent snapshot
+  backups of the state represented in the shared memory file. Its
+  `shm-restore` binary implements the client side of the `shm-snapshot`.
+- [`shm-state`] is a work-in-progress high-level library on top of the
+  restore/atomic journal mechanisms which aims to provide efficient data
+  structures in which a binary might keep state. These data structure should
+  provide all access characteristics of (immutable) memory data structures with
+  the snapshot persistence of the journaling.
+
+[`shm-fd`]: ./shm-fd/Readme.md
+[`shm-snapshot`]: ./shm-snapshot/Readme.md
+[`shm-state`]: ./shm-state/Readme.md
 
 ## Repository structure
 
