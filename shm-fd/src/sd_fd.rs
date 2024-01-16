@@ -1,12 +1,12 @@
 //! Interact with the Systemd notify socket.
 use std::env;
 use std::ffi::{OsString, OsStr};
-use std::os::fd::{RawFd, IntoRawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixDatagram;
 
 pub struct NotifyFd {
-    fd: RawFd,
+    fd: OwnedFd,
     addr: Vec<libc::c_char>,
 }
 
@@ -41,7 +41,7 @@ impl NotifyFd {
         dgram_socket.connect(name)?;
 
         Ok(NotifyFd {
-            fd: dgram_socket.into_raw_fd(),
+            fd: dgram_socket.into(),
             addr: name_bytes.iter().map(|&b| b as libc::c_char).collect(),
         })
     }
@@ -114,7 +114,7 @@ impl NotifyFd {
         }
 
         let sent = unsafe {
-            libc::sendmsg(self.fd, &hdr, libc::MSG_NOSIGNAL)
+            libc::sendmsg(self.fd.as_raw_fd(), &hdr, libc::MSG_NOSIGNAL)
         };
 
         if -1 == sent {
@@ -126,11 +126,5 @@ impl NotifyFd {
         }
 
         Ok(())
-    }
-}
-
-impl Drop for NotifyFd {
-    fn drop(&mut self) {
-        let _ = unsafe { libc::close(self.fd) };
     }
 }
