@@ -6,6 +6,10 @@ initialize and persist a new shared memory when the notify socket is detected
 with its environment variable `$NOTIFY_SOCKET` but also works standalone when
 no such socket is available.
 
+**These examples add systemd unit files to your user configuration, execute
+them if you know what you're doing**. The bash scripts work from within the
+docs folder or from the repository root.
+
 ### Oneshot
 
 In the oneshot service case, a binary working on the memory file is launched to
@@ -20,10 +24,12 @@ unit skeleton with the necessary configuration.
 
 ```bash
 export SHMFD="$(pwd)"
+[ -f systemd.md ] && export SHMFD="$(realpath ..)"
+
 cargo build --release -p shm-fd -p primes
 
 envsubst > ~/.config/systemd/user/shmfd-primes.service \
-    < docs/systemd.oneshot.template
+    < "$SHMFD/docs/systemd.oneshot.template"
 
 systemctl --user daemon-reload
 systemctl --user start shmfd-primes
@@ -34,6 +40,7 @@ journalctl --user _SYSTEMD_INVOCATION_ID=$_invocation
 
 # Now restart the service, which does not unload its file descriptor store
 systemctl --user restart shmfd-primes
+echo "Service restarted, output of second run follows"
 
 # To display output
 _invocation=`systemctl --user show --value -p InvocationID shmfd-primes`
@@ -49,15 +56,17 @@ reloads its state from disk in case of fresh starts or recovery.
 
 ```bash
 export SHMFD="$(pwd)"
+[ -f systemd.md ] && export SHMFD="$(realpath ..)"
+
 cargo build --release \
     -p shm-fd --bin shm-fd \
     -p shm-snapshot --features=shm-restore --bin shm-restore \
     -p primes-snapshot --bin primes-snapshot
 
 envsubst > ~/.config/systemd/user/shmfd-primes-snapshot.service \
-    < docs/systemd.service.template
+    < "$SHMFD/docs/systemd.service.template"
 
-truncate -s 100M $SHMFD/target/fprimes-snapshot
+truncate -s 100M "$SHMFD/target/fprimes-snapshot"
 systemctl --user daemon-reload
 systemctl --user start shmfd-primes-snapshot
 
