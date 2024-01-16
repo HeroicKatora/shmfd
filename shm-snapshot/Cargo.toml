@@ -1,9 +1,14 @@
 [package]
 name = "shm-snapshot"
-description = "Wrap a shm file so that the read-only partner can snapshot the file partially without explicit synchronization"
-
 version = "0.1.0"
 edition = "2021"
+
+authors = ["HeroicKatora"]
+description = "Wrap a shm file so that the read-only partner can snapshot the file partially without explicit synchronization"
+repository = "https://github.com/HeroicKatora/shmfd"
+license = "MPL-2.0"
+keywords = ["shm", "shared-memory", "systemfd", "listenfd", "shmfd"]
+categories = ["memory-management", "os::unix-apis"]
 
 [lib]
 
