@@ -11,7 +11,7 @@ use std::os::unix::{
 use clap::{Parser, ValueEnum};
 use memfile::MemFile;
 use memmap2::MmapRaw;
-use shm_fd::{ListenFd, ListenInit, SharedFd};
+use shm_fd::{ListenFd, ListenInit, NotifyFd, SharedFd};
 
 fn main() {
     let RestoreCommand {
@@ -28,11 +28,19 @@ fn main() {
         .transpose()
         .expect("failed to initialize LISTEN_FDS env");
 
+    let notify_sd = NotifyFd::new()
+        .expect("failed to open notify socket");
+
     let init = ListenInit::<MemFile>::named_or_try_create::<std::io::Error>(
         listen,
         fd_name,
         || MemFile::create_sealable("persistent"),
     ).expect("failed to initialized shm-file");
+
+    if let Some(notify) = notify_sd {
+        init.maybe_notify(notify, fd_name)
+            .expect("failed to setup socket store");
+    }
 
     let shmfd = unsafe {
         SharedFd::from_listen(&init.listen).expect("failed to map shmfd")
@@ -57,6 +65,7 @@ fn main() {
     let mut proc = process::Command::new(command);
     proc.args(&args);
 
+    unsafe { init.wrap_proc(&mut proc) };
     unsafe { init._set_pid(&mut proc) };
 
     unsafe { fcntl_cloexec(duped_shmfd.as_raw_fd()).expect("failed to set close-on-exec") };
@@ -76,13 +85,16 @@ fn main() {
 
     // Before we start, let's prepare whatever backup already exists.
     //
-    // FIXME: Only, if we had something to restore.
-    //     if init.file.is_some()
+    // FIXME: Only, if we had no file descriptor to restore from.
+    //
     // But that isn't correct if the environment setup the memory map for us without initializing
     // it from any persistent source. We might instead want to introduce modify-time values to the
     // header to decide, or base it off the latest live offset?
-    {
+    if init.file.is_some() {
+        eprintln!("Recovering in-memory data from backup");
         (protector.how)(protector.write_back.bck, protector.write_back.shm);
+    } else {
+        eprintln!("Recovering in-memory data from in-memory file (no-op)");
     }
 
     match snapshot {

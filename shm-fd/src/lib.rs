@@ -1,12 +1,17 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::ffi::c_int as RawFd;
+
 extern crate alloc;
 
-pub mod op;
 mod listenfd;
+pub mod op;
+#[cfg(feature = "std")]
+mod sd_fd;
 
 pub use listenfd::{ListenFd, ListenInit};
+#[cfg(feature = "std")]
+pub use sd_fd::NotifyFd;
 
 /// A raw file descriptor, opened for us by the environment.
 ///
@@ -35,6 +40,8 @@ impl SharedFd {
 
         let mut statbuf = unsafe { core::mem::zeroed::<libc::stat>() };
         if -1 == unsafe { libc::fstat(fd, &mut statbuf) } {
+            #[cfg(feature = "std")]
+            eprintln!("{}", std::io::Error::last_os_error());
             // FIXME: Report that error?
             return None;
         }

@@ -5,7 +5,14 @@ use shm_snapshot::{ConfigureFile, File, PreparedTransaction, Writer, Snapshot};
 
 fn main() {
     let Some(fd) = (unsafe { SharedFd::from_env() }) else {
-        panic!("No shared memory state found");
+        eprintln!(
+            "{:?} {:?} {:?}",
+            std::env::var("LISTEN_FDS"),
+            std::env::var("LISTEN_FDNAMES"),
+            std::env::var("LISTEN_PID"),
+        );
+
+        panic!("No or bad shared memory state found");
     };
 
     let (writer, mut state) = restore_from(fd);

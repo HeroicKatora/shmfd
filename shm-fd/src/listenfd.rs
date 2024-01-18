@@ -8,6 +8,8 @@ use alloc::borrow::ToOwned;
 
 #[cfg(feature = "std")]
 use std::os::unix::process::CommandExt;
+#[cfg(feature = "std")]
+use crate::NotifyFd;
 
 pub struct ListenFd {
     pub fd_base: RawFd,
@@ -137,6 +139,21 @@ impl<F> ListenInit<F> {
     }
 
     #[cfg(feature = "std")]
+    pub fn maybe_notify(&self, notify: NotifyFd, fd_name: &str)
+        -> Result<(), std::io::Error>
+        where F: std::os::fd::AsRawFd
+    {
+        if let Some(newfile) = &self.file.as_ref() {
+            let rawfd = newfile.as_raw_fd();
+            let state = format!("FDSTORE=1\nFDNAME={fd_name}");
+            notify.notify_with_fds(&state, core::slice::from_ref(&rawfd))
+        } else {
+            Ok(())
+        }
+    }
+
+
+    #[cfg(feature = "std")]
     pub unsafe fn wrap_proc(&self, proc: &mut std::process::Command)
         where F: std::os::fd::AsRawFd,
     {
@@ -148,12 +165,6 @@ impl<F> ListenInit<F> {
 
         unsafe {
             proc.pre_exec(move || {
-                let pid = format!("{}\0", libc::getpid());
-                static LISTEN_PID: &[u8] = b"LISTEN_PID\0";
-                if -1 == libc::setenv(LISTEN_PID.as_ptr() as *const _, pid.as_ptr() as *const _, 1) {
-                    return Err(std::io::Error::last_os_error());
-                }
-
                 if let Some(rawfd) = rawfd {
                     if rawfd == target {
                         // We adjust the flags to not close-on-exec.
@@ -179,11 +190,14 @@ impl<F> ListenInit<F> {
     // the assumed PID.
     #[cfg(feature = "std")]
     pub unsafe fn _set_pid(&self, proc: &mut std::process::Command) {
+        proc.env_remove("LISTEN_PID");
+
         if std::env::var_os("LISTEN_PID").is_some() {
             unsafe {
                 proc.pre_exec(|| {
-                    let pid = format!("{}\0", libc::getpid());
+                    let pid = format!("{}!!\0", libc::getpid());
                     static LISTEN_PID: &[u8] = b"LISTEN_PID\0";
+                    libc::unsetenv(LISTEN_PID.as_ptr() as *const _);
 
                     if -1 == libc::setenv(
                         LISTEN_PID.as_ptr() as *const _,

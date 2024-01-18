@@ -1,6 +1,4 @@
-mod sd_fd;
-
-use shm_fd::{ListenFd, ListenInit};
+use shm_fd::{ListenFd, ListenInit, NotifyFd};
 use memfile::MemFile;
 
 use std::os::fd::AsRawFd;
@@ -18,7 +16,7 @@ fn main() {
         .transpose()
         .expect("failed to parse LISTEN_FDS information");
 
-    let notify_sd = sd_fd::NotifyFd::new()
+    let notify_sd = NotifyFd::new()
         .expect("failed to open notify socket");
 
     let init = ListenInit::<MemFile>::named_or_try_create(
@@ -30,15 +28,18 @@ fn main() {
     // Just reserve a file descriptor...
     let rawfd = init.file.as_ref().map(|v| v.as_raw_fd());
 
+    if let Some(notify) = notify_sd {
+        if let Some(rawfd) = rawfd {
+            eprintln!("Passing new file {rawfd}:{fd_name} to environment");
+        }
+
+        // If we created a new file descriptor, pass it to systemd.
+        init.maybe_notify(notify, fd_name)
+            .expect("failed to setup socket store");
+    }
+
     if let Some(rawfd) = rawfd {
         eprintln!("Created new file at fd {}", rawfd);
-        if let Some(notify) = notify_sd {
-            // If we created a new file descriptor, pass it to systemd.
-            eprintln!("Passing new file {rawfd}:{fd_name} to environment");
-            let state = format!("FDSTORE=1\nFDNAME={fd_name}");
-            notify.notify_with_fds(&state, core::slice::from_ref(&rawfd))
-                .expect("failed to setup socket store");
-        }
     }
 
     let mut proc = Command::new(&cmd);
