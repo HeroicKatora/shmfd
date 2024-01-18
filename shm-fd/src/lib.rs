@@ -6,7 +6,7 @@ extern crate alloc;
 pub mod op;
 mod listenfd;
 
-pub use listenfd::ListenFd;
+pub use listenfd::{ListenFd, ListenInit};
 
 /// A raw file descriptor, opened for us by the environment.
 ///

@@ -4,11 +4,21 @@
 //! initializing.
 use crate::RawFd;
 use alloc::{string::String, vec::Vec};
+use alloc::borrow::ToOwned;
+
+#[cfg(feature = "std")]
+use std::os::unix::process::CommandExt;
 
 pub struct ListenFd {
     pub fd_base: RawFd,
     pub fd_len: RawFd,
     pub names: Vec<String>,
+}
+
+pub struct ListenInit<F> {
+    pub listen: ListenFd,
+    pub file: Option<F>,
+    pub target: RawFd,
 }
 
 #[derive(Debug)]
@@ -22,13 +32,6 @@ pub enum Error {
 impl ListenFd {
     #[cfg(all(feature = "std", feature = "libc"))]
     pub fn new() -> Option<Result<Self, Error>> {
-        eprintln!(
-            "{:?} {:?} {:?}",
-            std::env::var_os("LISTEN_FDS"),
-            std::env::var_os("LISTEN_PID"),
-            std::env::var_os("LISTEN_FDNAMES"),
-        );
-
         let Some(count) = std::env::var_os("LISTEN_FDS") else {
             return None;
         };
@@ -77,5 +80,94 @@ impl ListenFd {
         };
 
         Some(Ok(listen))
+    }
+}
+
+impl<F> ListenInit<F> {
+    pub fn named_or_try_create<R>(
+        this: Option<ListenFd>,
+        fd_name: &str,
+        with: impl FnOnce() -> Result<F, R>,
+    ) -> Result<Self, R> {
+        match this {
+            None => {
+                let file = with()?;
+                let target = 3;
+
+                let listen = ListenFd {
+                    fd_base: 3,
+                    fd_len: 1,
+                    names: Vec::from([fd_name.to_owned()]),
+                };
+
+                Ok(ListenInit {
+                    listen,
+                    file: Some(file),
+                    target,
+                })
+            }
+            Some(listen) => {
+                let mut listen = listen;
+                // Re-use the listenfd state passed to us.
+                let position = listen.names
+                    .iter()
+                    .position(|n| n == fd_name);
+
+                let (target, file);
+                if let Some(position) = position {
+                    target = listen.fd_base + position as RawFd;
+                    // FIXME: verify that this is a memfile?
+                    file = None;
+                } else {
+                    let _file = with()?;
+                    file = Some(_file);
+
+                    listen.names.push(fd_name.into());
+                    target = listen.fd_base + listen.fd_len;
+                    listen.fd_len += 1;
+                }
+
+                Ok(ListenInit {
+                    listen,
+                    file,
+                    target,
+                })
+            }
+        }
+    }
+
+    #[cfg(feature = "std")]
+    pub unsafe fn wrap_proc(&self, proc: &mut std::process::Command)
+        where F: std::os::fd::AsRawFd,
+    {
+        let rawfd = self.file.as_ref().map(|v| v.as_raw_fd());
+        proc.env("LISTEN_FDS", self.listen.fd_len.to_string());
+        proc.env("LISTEN_FDNAMES", self.listen.names.join(":"));
+        let target = self.target;
+
+        unsafe {
+            proc.pre_exec(move || {
+                let pid = format!("{}\0", libc::getpid());
+                static LISTEN_PID: &[u8] = b"LISTEN_PID\0";
+                if -1 == libc::setenv(LISTEN_PID.as_ptr() as *const _, pid.as_ptr() as *const _, 1) {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                if let Some(rawfd) = rawfd {
+                    if rawfd == target {
+                        // We adjust the flags to not close-on-exec.
+                        if -1 == libc::fcntl(rawfd, libc::F_SETFD, 0) {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    } else {
+                        if -1 == libc::dup2(rawfd, target) {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                }
+
+                Ok(())
+            });
+        }
     }
 }
