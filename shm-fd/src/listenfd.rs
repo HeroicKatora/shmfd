@@ -141,6 +141,7 @@ impl<F> ListenInit<F> {
         where F: std::os::fd::AsRawFd,
     {
         let rawfd = self.file.as_ref().map(|v| v.as_raw_fd());
+
         proc.env("LISTEN_FDS", self.listen.fd_len.to_string());
         proc.env("LISTEN_FDNAMES", self.listen.names.join(":"));
         let target = self.target;
@@ -168,6 +169,33 @@ impl<F> ListenInit<F> {
 
                 Ok(())
             });
+        }
+    }
+
+    // FIXME: it's not clear if we want to do this, fake the LISTEN_PID that is. Sure, the systemd
+    // library uses it to check whether a file descriptor array passed as LISTEN_FDS is meant for
+    // it but *also* for the notify socket. We can consciously pass-on the file descriptors but not
+    // the socket, which would not work as expected for it and reject messages as unauthorized by
+    // the assumed PID.
+    #[cfg(feature = "std")]
+    pub unsafe fn _set_pid(&self, proc: &mut std::process::Command) {
+        if std::env::var_os("LISTEN_PID").is_some() {
+            unsafe {
+                proc.pre_exec(|| {
+                    let pid = format!("{}\0", libc::getpid());
+                    static LISTEN_PID: &[u8] = b"LISTEN_PID\0";
+
+                    if -1 == libc::setenv(
+                        LISTEN_PID.as_ptr() as *const _,
+                        pid.as_ptr() as *const _,
+                        1 /* overwrite */,
+                    ) {
+                        return Err(std::io::Error::last_os_error());
+                    }
+
+                    Ok(())
+                });
+            }
         }
     }
 }

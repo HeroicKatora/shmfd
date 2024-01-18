@@ -6,13 +6,12 @@ use std::os::unix::{
     io::AsRawFd,
     io::RawFd,
     io::IntoRawFd,
-    process::CommandExt
 };
 
-
-use memmap2::MmapRaw;
-use shm_fd::SharedFd;
 use clap::{Parser, ValueEnum};
+use memfile::MemFile;
+use memmap2::MmapRaw;
+use shm_fd::{ListenFd, ListenInit, SharedFd};
 
 fn main() {
     let RestoreCommand {
@@ -22,16 +21,31 @@ fn main() {
         args,
     } = RestoreCommand::parse();
 
-    let duped_shmfd = if let Some(fd) = unsafe { SharedFd::from_env() } {
-        match unsafe { libc::dup(fd.as_raw_fd()) } {
+    // FIXME: allow customization.
+    let fd_name = "SHM_SHARED_FD";
+
+    let listen = ListenFd::new()
+        .transpose()
+        .expect("failed to initialize LISTEN_FDS env");
+
+    let init = ListenInit::<MemFile>::named_or_try_create::<std::io::Error>(
+        listen,
+        fd_name,
+        || MemFile::create_sealable("persistent"),
+    ).expect("failed to initialized shm-file");
+
+    let shmfd = unsafe {
+        SharedFd::from_listen(&init.listen).expect("failed to map shmfd")
+    };
+
+    let duped_shmfd = {
+        match unsafe { libc::dup(shmfd.as_raw_fd()) } {
             -1 => Err(std::io::Error::last_os_error()).expect("failed to dup"),
             safe => safe,
         }
-    } else {
-        std::process::exit(1);
     };
 
-    // Open the file now, ensure we have it as a file descriptor before proceeding.
+    // Open the output file now, ensure we have it as a file descriptor before proceeding.
     let backup_file = OpenOptions::new()
         .create(true)
         .read(true)
@@ -43,30 +57,16 @@ fn main() {
     let mut proc = process::Command::new(command);
     proc.args(&args);
 
-    if std::env::var_os("LISTEN_PID").is_some() {
-        unsafe {
-            proc.pre_exec(|| {
-                let pid = format!("{}\0", libc::getpid());
-                static LISTEN_PID: &[u8] = b"LISTEN_PID\0";
-
-                if -1 == libc::setenv(
-                    LISTEN_PID.as_ptr() as *const _,
-                    pid.as_ptr() as *const _,
-                    1 /* overwrite */,
-                ) {
-                    return Err(std::io::Error::last_os_error());
-                }
-
-                Ok(())
-            });
-        }
-    }
+    unsafe { init._set_pid(&mut proc) };
 
     unsafe { fcntl_cloexec(duped_shmfd.as_raw_fd()).expect("failed to set close-on-exec") };
     unsafe { fcntl_cloexec(backup_file.as_raw_fd()).expect("failed to set close-on-exec") };
 
     // Ignore SIGTERM and SIGCHLD as we always wait for our child to exit first.
     unsafe { posixly_ignore_signals() };
+
+    // FIXME: if we unwind right away, it's bad. We will overwrite the backing file with this
+    // currently raw, potentially bad, state causing data loss. Fu..
     let protector = unsafe {
         writeback_protector(WriteBack {
             shm: duped_shmfd,
@@ -75,6 +75,12 @@ fn main() {
     }.expect("Can protect with write back");
 
     // Before we start, let's prepare whatever backup already exists.
+    //
+    // FIXME: Only, if we had something to restore.
+    //     if init.file.is_some()
+    // But that isn't correct if the environment setup the memory map for us without initializing
+    // it from any persistent source. We might instead want to introduce modify-time values to the
+    // header to decide, or base it off the latest live offset?
     {
         (protector.how)(protector.write_back.bck, protector.write_back.shm);
     }

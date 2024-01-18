@@ -29,7 +29,7 @@ impl SharedFd {
 
     /// Import a shared file descriptor based on the contents that would be in the environment variable `SHM_SHARED_FDS`.
     #[cfg(all(feature = "libc"))]
-    unsafe fn from_listen(var: &ListenFd) -> Option<Self> {
+    pub unsafe fn from_listen(var: &ListenFd) -> Option<Self> {
         let num = var.names.iter().position(|v|v == "SHM_SHARED_FD")?;
         let fd: RawFd = var.fd_base + num as RawFd;
 

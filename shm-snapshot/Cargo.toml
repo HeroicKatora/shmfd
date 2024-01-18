@@ -19,6 +19,7 @@ required-features = ["shm-restore"]
 [features]
 shm-restore = [
   "libc",
+  "memfile",
   "shm-fd",
   "shm-fd/libc",
   "shm-fd/std",
@@ -44,6 +45,10 @@ optional = true
 [dependencies.clap]
 version = "4"
 features = ["derive"]
+optional = true
+
+[dependencies.memfile]
+version = "0.2.1"
 optional = true
 
 [dev-dependencies.memfile]
