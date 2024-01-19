@@ -17,6 +17,7 @@ fn main() {
         .expect("failed to parse LISTEN_FDS information");
 
     let notify_sd = NotifyFd::new()
+        .transpose()
         .expect("failed to open notify socket");
 
     let init = ListenInit::<MemFile>::named_or_try_create(

@@ -5,6 +5,12 @@ use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixDatagram;
 
+/// A socket, communicating with systemd.
+///
+/// See `man sd_notify` for general information on the kind of notifications that can be sent to
+/// the service manager. Note that there's generally no feedback as described by the man page. The
+/// errors indicate whether the OS interactions failed, not whether any of the messages have been
+/// interpreted or resulted in success.
 pub struct NotifyFd {
     fd: OwnedFd,
     addr: Vec<libc::c_char>,
@@ -12,14 +18,21 @@ pub struct NotifyFd {
 
 // https://github.com/systemd/systemd/blob/414ae39821f0c103b076fc5f7432f827e0e79765/src/libsystemd/sd-daemon/sd-daemon.c#L454-L598
 impl NotifyFd {
-    pub fn new() -> Result<Option<Self>, std::io::Error> {
+    /// Open the notification socket, if configured in the environment.
+    pub fn new() -> Option<Result<Self, std::io::Error>> {
         let Some(addr) = env::var_os("NOTIFY_SOCKET") else {
-            return Ok(None);
+            return None;
         };
 
-        Self::from_env(addr).map(Some)
+        Self::from_env(addr).map(Some).transpose()
     }
 
+    /// Open the socket named by the environment string.
+    ///
+    /// This should be generally used with the contents of `$NOTIFY_SOCKET`. The string is
+    /// interpreted based on the supported protocol and the first character, as described in the
+    /// systemd documentation. Note that there's a maximum sensible length for the path named by
+    /// this environment variable, as per `libc::sockaddr_un`.
     pub fn from_env(name: OsString) -> Result<Self, std::io::Error> {
         let ty = name.as_encoded_bytes().get(0).cloned();
 
