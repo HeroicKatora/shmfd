@@ -3,15 +3,18 @@ use core::ffi::c_int;
 use alloc::sync::Arc;
 
 /// Interact with `shm*` and related calls.
+#[allow(dead_code)]
 pub struct Shm {
     inner: Arc<ShmInner>,
 }
 
+#[allow(dead_code)]
 struct ShmInner {
     vtable: ShmVTable,
 }
 
 /// An error returned when interaction with a shared memory file.
+#[allow(dead_code)]
 pub struct ShmError(c_int);
 
 /// *Fixed* type, not platform dependent.
@@ -48,11 +51,12 @@ pub struct Stat {
 /// with override/linker tricks.
 #[non_exhaustive]
 pub struct ShmVTable {
-    pub fstat: fn(c_int, *mut Stat) -> c_int,
+    pub fstat: fn(c_int, Option<&mut Stat>) -> c_int,
     pub close: fn(c_int) -> c_int,
     pub errno: fn() -> c_int,
 }
 
+#[allow(dead_code)]
 impl Shm {
     /// Create an `Shm` from a customized vtable.
     ///
@@ -64,30 +68,51 @@ impl Shm {
             inner: Arc::new(ShmInner { vtable }),
         }
     }
-
-
     #[cfg(feature = "libc")]
     pub fn new() -> Self {
-        fn _fstat(fd: c_int, stat: *mut Stat) -> c_int {
+        unsafe {
+            Self::new_unchecked(ShmVTable::new_libc())
+        }
+    }
+
+    pub fn stat(&self, shared: &SharedFd) -> Result<Stat, ShmError> {
+        let mut stat = Stat::default();
+        let inner = (self.inner.vtable.fstat)(shared.fd, Some(&mut stat));
+
+        if inner < 0 {
+            return Err(ShmError((self.inner.vtable.errno)()));
+        } else {
+            Ok(stat)
+        }
+    }
+}
+
+impl ShmVTable {
+    #[cfg(feature = "libc")]
+    pub fn new_libc() -> Self {
+        fn _fstat(fd: c_int, stat: Option<&mut Stat>) -> c_int {
             let mut uninit = core::mem::MaybeUninit::<libc::stat>::zeroed();
+            // Safety: passing the correct pointer to a struct of libc::stat.
             let ret = unsafe { libc::fstat(fd, uninit.as_mut_ptr()) };
 
             if ret == 0 {
+                // Safety: always initialized on return with success.
                 let lstat = unsafe { uninit.assume_init() };
-
-                *unsafe { &mut *stat } = Stat {
-                    st_mode: lstat.st_mode,
-                    st_uid: lstat.st_uid,
-                    st_gid: lstat.st_gid,
-                    st_size: lstat.st_size,
-                    st_blksize: lstat.st_blksize,
-                    st_blocks: lstat.st_blocks,
-                    st_atime: lstat.st_atime,
-                    st_atime_nsec: lstat.st_atime_nsec,
-                    st_mtime: lstat.st_mtime,
-                    st_mtime_nsec: lstat.st_mtime_nsec,
-                    st_ctime: lstat.st_ctime,
-                    st_ctime_nsec: lstat.st_ctime_nsec,
+                if let Some(stat) = stat {
+                    *stat = Stat {
+                        st_mode: lstat.st_mode,
+                        st_uid: lstat.st_uid,
+                        st_gid: lstat.st_gid,
+                        st_size: lstat.st_size,
+                        st_blksize: lstat.st_blksize,
+                        st_blocks: lstat.st_blocks,
+                        st_atime: lstat.st_atime,
+                        st_atime_nsec: lstat.st_atime_nsec,
+                        st_mtime: lstat.st_mtime,
+                        st_mtime_nsec: lstat.st_mtime_nsec,
+                        st_ctime: lstat.st_ctime,
+                        st_ctime_nsec: lstat.st_ctime_nsec,
+                    };
                 };
             }
 
@@ -102,23 +127,10 @@ impl Shm {
             unsafe { *libc::__errno_location() }
         }
 
-        unsafe {
-            Self::new_unchecked(ShmVTable {
-                fstat: _fstat,
-                close: _close_inner,
-                errno: _errno,
-            })
-        }
-    }
-
-    pub fn stat(&self, shared: &SharedFd) -> Result<Stat, ShmError> {
-        let mut stat = Stat::default();
-        let inner = (self.inner.vtable.fstat)(shared.fd, &mut stat);
-
-        if inner < 0 {
-            return Err(ShmError((self.inner.vtable.errno)()));
-        } else {
-            Ok(stat)
+        ShmVTable {
+            fstat: _fstat,
+            close: _close_inner,
+            errno: _errno,
         }
     }
 }

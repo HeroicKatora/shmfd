@@ -1,6 +1,6 @@
 [package]
 name = "shm-snapshot"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 authors = ["HeroicKatora"]
@@ -37,7 +37,7 @@ version = "0.2.109"
 optional = true
 [dependencies.shm-fd]
 path = "../shm-fd"
-version = "0.4"
+version = "0.5"
 optional = true
 [dependencies.tempfile]
 version = "3.8"

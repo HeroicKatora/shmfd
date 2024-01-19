@@ -5,7 +5,12 @@ use core::ffi::c_int as RawFd;
 extern crate alloc;
 
 mod listenfd;
-pub mod op;
+// FIXME: tried, but not as useful as intended. There are a few types we use in interfaces and
+// representations which would have to be modelled, too (for the std::env::var_os and for
+// libc::AF_UNIX / libc::sendmsg mostly).
+//
+// Hence, this module is private for now until that representation is figured out.
+mod op;
 #[cfg(feature = "std")]
 mod sd_fd;
 
@@ -38,10 +43,7 @@ impl SharedFd {
         let num = var.names.iter().position(|v|v == "SHM_SHARED_FD")?;
         let fd: RawFd = var.fd_base + num as RawFd;
 
-        let mut statbuf = unsafe { core::mem::zeroed::<libc::stat>() };
-        if -1 == unsafe { libc::fstat(fd, &mut statbuf) } {
-            #[cfg(feature = "std")]
-            eprintln!("{fd} {}", std::io::Error::last_os_error());
+        if -1 == (op::ShmVTable::new_libc().fstat)(fd, None) {
             // FIXME: Report that error?
             return None;
         }
