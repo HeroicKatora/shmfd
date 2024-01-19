@@ -25,11 +25,9 @@ impl NotifyFd {
 
         let name_bytes = match ty {
             Some(b'/') => {
-                eprintln!("Path: {:?}", name);
                 name.as_encoded_bytes()
             }
             Some(b'@') => {
-                eprintln!("Anon: {:?}", name);
                 &name.as_encoded_bytes()[1..]
             },
             _ => return Err(std::io::ErrorKind::Unsupported)?,

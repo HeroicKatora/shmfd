@@ -41,7 +41,7 @@ impl SharedFd {
         let mut statbuf = unsafe { core::mem::zeroed::<libc::stat>() };
         if -1 == unsafe { libc::fstat(fd, &mut statbuf) } {
             #[cfg(feature = "std")]
-            eprintln!("{}", std::io::Error::last_os_error());
+            eprintln!("{fd} {}", std::io::Error::last_os_error());
             // FIXME: Report that error?
             return None;
         }

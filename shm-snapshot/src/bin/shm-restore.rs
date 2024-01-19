@@ -42,12 +42,26 @@ fn main() {
             .expect("failed to setup socket store");
     }
 
-    let shmfd = unsafe {
-        SharedFd::from_listen(&init.listen).expect("failed to map shmfd")
+    let shmfd;
+    let shmfd_borrowed_fd = if let Some(opened) = &init.file {
+        // The memfile was created by us, the file descriptor in the init will thus only be valid
+        // to our subprocess where it is mapped to the correct.
+        opened.as_raw_fd()
+    } else {
+        // Safety: we got passed this configuration from the environment, i.e. all the file
+        // descriptors referred to by name are assumed to be valid. Here, we effectively take
+        // control of that file descriptor. (This program has not taken any of the file descriptors
+        // up to this point).
+        shmfd = unsafe {
+            SharedFd::from_listen(&init.listen).expect("failed to map shmfd")
+        };
+
+        shmfd.as_raw_fd()
     };
 
     let duped_shmfd = {
-        match unsafe { libc::dup(shmfd.as_raw_fd()) } {
+        // Safety: file descriptor 'borrowed', and thus valid.
+        match unsafe { libc::dup(shmfd_borrowed_fd) } {
             -1 => Err(std::io::Error::last_os_error()).expect("failed to dup"),
             safe => safe,
         }
@@ -97,6 +111,7 @@ fn main() {
         eprintln!("Recovering in-memory data from in-memory file (no-op)");
     }
 
+    eprintln!("Executing subprocess");
     match snapshot {
         None => {
             let protector: Dropped = protector;
