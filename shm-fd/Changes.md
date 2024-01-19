@@ -1,3 +1,9 @@
+## Version 0.5
+
+- Removed `op` module that was not integrated publicly.
+- Add `NotifyFd` to the public API, requiring `std` and `libc`.
+- Add all features to docs.rs metadata.
+
 ## Version 0.4
 
 Integrated with systemd File Descriptor store, the environment variables are

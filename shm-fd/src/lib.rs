@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 use core::ffi::c_int as RawFd;
 
@@ -11,12 +12,12 @@ mod listenfd;
 //
 // Hence, this module is private for now until that representation is figured out.
 mod op;
-#[cfg(feature = "std")]
-mod sd_fd;
+#[cfg(all(feature = "std", feature = "libc"))]
+mod notifyfd;
 
 pub use listenfd::{ListenFd, ListenInit};
-#[cfg(feature = "std")]
-pub use sd_fd::NotifyFd;
+#[cfg(all(feature = "std", feature = "libc"))]
+pub use notifyfd::NotifyFd;
 
 /// A raw file descriptor, opened for us by the environment.
 ///
@@ -67,6 +68,7 @@ impl SharedFd {
         self.fd
     }
 
+    /// Grab the raw fie descriptor.
     pub fn into_raw_fd(self) -> RawFd {
         let _this = core::mem::ManuallyDrop::new(self);
         _this.fd

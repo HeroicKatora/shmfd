@@ -11,16 +11,36 @@ use std::os::unix::process::CommandExt;
 #[cfg(feature = "std")]
 use crate::NotifyFd;
 
+/// Captures information on file descriptors passed through the environment.
+///
+/// When systemd sets pre-opened file descriptors in a service unit, it passes a description of
+/// them via the environment variables.
 pub struct ListenFd {
+    /// The first file descriptor referred to by the environment.
     pub fd_base: RawFd,
+    /// The count of file descriptors referred to by the environment.
     pub fd_len: RawFd,
+    /// The names / descriptors of all file descriptors, if available.
     pub names: Vec<String>,
 }
 
+/// A `ListenFd` enriched with a relevant file descriptor for passing to a child process.
+///
+/// This either captures one of the file descriptors passed, or initialized a new owning file
+/// descriptor, generally a file. It also computes the *target* file descriptor number. That is, if
+/// the file was captured by finding its name in the `LISTN_FDNAMES` array then it is computed and
+/// in-bounds of the passed array. If the file was not captured, it is _added_ to the `listen`
+/// information and its new hypothetical descriptor is stored in `target`.
 pub struct ListenInit<F> {
+    /// The originally, potentially modified, passed `ListenFd`.
     pub listen: ListenFd,
+    /// Owns the file if it had to be constructed due to not being found.
     pub file: Option<F>,
+    /// The file descriptor the file would have in childs (or the next restart if registered).
+    ///
+    /// See struct description.
     pub target: RawFd,
+    _inner: (),
 }
 
 #[derive(Debug)]
@@ -32,6 +52,7 @@ pub enum Error {
 
 // https://github.com/systemd/systemd/blob/414ae39821f0c103b076fc5f7432f827e0e79765/src/libsystemd/sd-daemon/sd-daemon.c#L92-L129
 impl ListenFd {
+    /// Capture and translate the systemd standard environment variables.
     #[cfg(all(feature = "std", feature = "libc"))]
     pub fn new() -> Option<Result<Self, Error>> {
         let Some(count) = std::env::var_os("LISTEN_FDS") else {
@@ -86,6 +107,7 @@ impl ListenFd {
 }
 
 impl<F> ListenInit<F> {
+    /// Derive a new ListenFd setup, finds or adds a file descriptor.
     pub fn named_or_try_create<R>(
         this: Option<ListenFd>,
         fd_name: &str,
@@ -106,6 +128,7 @@ impl<F> ListenInit<F> {
                     listen,
                     file: Some(file),
                     target,
+                    _inner: (),
                 })
             }
             Some(listen) => {
@@ -133,11 +156,13 @@ impl<F> ListenInit<F> {
                     listen,
                     file,
                     target,
+                    _inner: (),
                 })
             }
         }
     }
 
+    /// Notify systemd, if the file descriptor was not present.
     #[cfg(feature = "std")]
     pub fn maybe_notify(&self, notify: NotifyFd, fd_name: &str)
         -> Result<(), std::io::Error>
@@ -152,7 +177,12 @@ impl<F> ListenInit<F> {
         }
     }
 
-
+    /// Modify a command such that it copies the file descriptors at the appropriate location.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe, since the caller must prove that copying the file descriptors is
+    /// okay.
     #[cfg(feature = "std")]
     pub unsafe fn wrap_proc(&self, proc: &mut std::process::Command)
         where F: std::os::fd::AsRawFd,
@@ -188,6 +218,7 @@ impl<F> ListenInit<F> {
     // it but *also* for the notify socket. We can consciously pass-on the file descriptors but not
     // the socket, which would not work as expected for it and reject messages as unauthorized by
     // the assumed PID.
+    #[doc(hidden)]
     #[cfg(feature = "std")]
     pub unsafe fn _set_pid(&self, proc: &mut std::process::Command) {
         proc.env_remove("LISTEN_PID");
