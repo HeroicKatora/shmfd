@@ -2,6 +2,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use core::iter::Extend;
 use memmap2::MmapRaw;
 
+/// A memory-mapped file into which this writer adds new snapshot.
 pub struct Writer {
     pub(crate) head: Head,
 }
@@ -13,16 +14,24 @@ pub struct File {
     pub(crate) head: Head,
 }
 
+/// A view onto a memory-mapped file, which has a configured layout.
 pub struct FileDiscovery<'lt> {
     pub(crate) file: &'lt File,
     pub(crate) configuration: ConfigureFile,
 }
 
+/// Describes the layout of a shared memory in a [`Writer`].
 #[derive(Default, Debug)]
 pub struct ConfigureFile {
+    /// The number of entries in the sequence ring buffer.
     pub entries: u64,
+    /// The number of bytes in the data ring buffer.
     pub data: u64,
+    /// The offset of the next-to-write entry.
     pub initial_offset: u64,
+    /// The indicate version in the file, or an explicit invalid number.
+    ///
+    /// Can't allow it to be public, it's not supposed to be arbitrarily set.
     pub(crate) layout_version: u64,
 }
 
@@ -34,9 +43,13 @@ pub struct Head {
     file: MmapRaw,
 }
 
+/// The descriptor of a singular snapshot.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Snapshot {
+    /// The offset of data in the data ring.
     pub offset: u64,
+    /// The length of data in the data ring. A non-zero length marks a valid entry, a zero length
+    /// an invalid entry.
     pub length: u64,
 }
 
@@ -58,6 +71,7 @@ pub(crate) struct Entry<'lt> {
     head: &'lt mut WriteHead,
 }
 
+/// An unfinished entry in a writer's ring, which can be atomically committed.
 pub struct PreparedTransaction<'lt> {
     offset: u64,
     length: u64,
@@ -285,8 +299,17 @@ impl Head {
 impl ConfigureFile {
     pub(crate) const MAGIC_VERSION: u64 = 0x96c2_a6f4b68519b3;
 
+    /// Is the configuration data complete?
     pub fn is_initialized(&self) -> bool {
         self.layout_version == Self::MAGIC_VERSION
+    }
+
+    /// Complete this configuration, if it is not already.
+    pub fn or_insert_with(&mut self, replace: impl FnOnce(&mut Self)) {
+        if !self.is_initialized() {
+            replace(self);
+            self.layout_version = ConfigureFile::MAGIC_VERSION;
+        }
     }
 }
 

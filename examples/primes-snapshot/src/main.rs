@@ -47,7 +47,10 @@ fn main() {
         }
 
         let put = &chunk.end.to_be_bytes();
-        let (_, new_state) = writer.write_with(put, |tx| run_main_routine(tx, chunk)).unwrap();
+        let Ok((_, new_state)) = writer.commit_with(put, |tx| run_main_routine(tx, chunk)) else {
+            break;
+        };
+
         state = new_state;
 
         std::thread::sleep(std::time::Duration::from_millis(interval));

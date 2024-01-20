@@ -1,7 +1,7 @@
 [workspace]
 members = [
   "shm-fd",
-  "shm-state",
+  # "shm-state",
   "shm-snapshot",
   "examples/primes",
   "examples/primes-snapshot",

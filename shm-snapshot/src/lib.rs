@@ -1,3 +1,4 @@
+//! Interact with a memory-mapped file in the systemd File Descriptor store, for snapshot-restore of some state.
 #[cfg(test)]
 mod tests;
 mod writer;
@@ -8,14 +9,29 @@ use writer::Head;
 use core::sync::atomic::AtomicU64;
 use memmap2::MmapRaw;
 
+/// The index of a snapshot in a file wrapped with a [`Writer`].
+///
+/// Requires the file metadata (the size of the entry ring) to determine a precise memory offset in
+/// the file. This index does not guarantee that a snapshot is, or will stay, valid.
 #[derive(Debug)]
-pub struct Commit {
+pub struct SnapshotIndex {
     /// The entry index at which we have in fact committed. Not clear what use it would be to make
     /// this number available but we want to debug the struct anyways.
     #[allow(dead_code)]
     entry: u64,
 }
 
+/// A value that can decide whether a snapshot should be considered valid.
+///
+/// This is commonly used when it is necessary to identify snapshots which have not been changed,
+/// in `FileDiscovery::retain`. Any modification to the data range covered by a snapshot is
+/// preceded by an invalidation of said snapshot. If the same snapshot is observed as valid
+/// multiple times, then the observer is guaranteed its data was not modified between the
+/// observations.
+///
+/// The strategy need not be sensitive, false negatives should be considered correct, but can lead
+/// to suboptimal behavior (i.e. discard of snapshots, higher error rate of the strategy used to
+/// make snapshots).
 pub trait RetainSnapshot {
     fn contains(&self, snapshot: &Snapshot) -> bool;
 }
@@ -32,7 +48,8 @@ impl RetainSnapshot for Vec<Snapshot> {
     }
 }
 
-pub struct CommitError {
+/// An error, trying to commit a snapshot with [`Writer::commit`].
+pub struct WriterCommitError {
     _inner: (),
 }
 
@@ -61,6 +78,7 @@ impl File {
         })
     }
 
+    /// Change the metadata of the file, to the one described in the configuration.
     pub fn configure(mut self, cfg: &ConfigureFile) -> Writer {
         self.head.configure(cfg);
         self.into_writer_unguarded()
@@ -73,19 +91,19 @@ impl File {
 }
 
 impl FileDiscovery<'_> {
-    // FIXME: makes little sense. Reading data depends on our configuration, i.e. we need valid
-    // offsets and page masks here. But the `head` does not automatically use those of the file.
-    // Should we instead have a configuration to provide here which is used when valid? Or even
-    // load the one from the file, fresh? The same applies to `valid` however.
+    /// Read data described by a snapshot, with discovered metadata in the file.
     pub fn read(&self, snapshot: &Snapshot, buffer: &mut [u8]) {
         self.file.head.read_at(snapshot, buffer, &self.configuration)
     }
 
     /// Iteratively read all valid entries from the file.
     ///
-    /// The order of reads is not determined. Internally we have a structure equivalent to a
-    /// VecDeque and are iterating in the order of the underlying raw slice, not the order of the
-    /// actual logical data layout.
+    /// The order of reads is not guaranteed. Internally we have a structure equivalent to a ring
+    /// buffer (similar to `VecDeque`) and likely are iterating in the order of the underlying raw
+    /// slice, not the order of the actual logical data layout.
+    ///
+    /// More specific interfaces for external iteration with an iterator may be added. Send changes
+    /// if you have an implementation.
     #[inline(always)]
     pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
         self.file.head.valid_at(into, &self.configuration)
@@ -103,21 +121,24 @@ impl FileDiscovery<'_> {
 /// Public interface of the writer.
 impl Writer {
     /// Insert some data into the atomic log of the shared memory.
-    pub fn write(&mut self, data: &[u8]) -> Result<Commit, CommitError> {
+    pub fn commit(&mut self, data: &[u8]) -> Result<SnapshotIndex, WriterCommitError> {
         match self.head.write_with(data, &mut |_tx| true)  {
-            Ok(entry) => Ok(Commit { entry }),
-            Err(_) => Err(CommitError { _inner: () })
+            Ok(entry) => Ok(SnapshotIndex { entry }),
+            Err(_) => Err(WriterCommitError { _inner: () })
         }
     }
 
     /// Insert some data into the atomic log of the shared memory.
     ///
-    /// This also invokes a function before committing the data.
-    pub fn write_with<T>(
+    /// This also invokes a function such that it's effects are sequenced after the reservation of
+    /// the new slot but before committing the data. The function can also introduce changes that
+    /// appear correctly from the semantics view of the ring. Changes to the tail can be made via
+    /// the passed `PreparedTransaction` object.
+    pub fn commit_with<T>(
         &mut self,
         data: &[u8],
         intermediate: impl FnOnce(PreparedTransaction) -> Option<T>
-    ) -> Result<(Commit, T), CommitError> {
+    ) -> Result<(SnapshotIndex, T), WriterCommitError> {
         let mut dropped = Some(intermediate);
         let mut result = None;
         let ref mut result_ref = result;
@@ -136,42 +157,40 @@ impl Writer {
         match self.head.write_with(data, &mut intermediate)  {
             Ok(entry) => {
                 let val = result.expect("written when returning `true`");
-                Ok((Commit { entry }, val))
+                Ok((SnapshotIndex { entry }, val))
             },
-            Err(_) => Err(CommitError { _inner: () })
+            Err(_) => Err(WriterCommitError { _inner: () })
         }
     }
 
+    /// Read data described by a snapshot, with discovered metadata in the file.
     pub fn read(&self, snapshot: &Snapshot, buffer: &mut [u8]) {
         self.head.read(snapshot, buffer);
     }
 
+    /// Collect all currently valid snapshot entries.
     #[inline(always)]
     pub fn valid(&self, into: &mut impl Extend<Snapshot>) {
         self.head.valid(into)
     }
 
+    /// Access the tail of the underlying shared memory file.
+    ///
+    /// This refers to the portion of the file after the header, the entry ring, and the data ring
+    /// buffer. This data can not be referenced by an entry directly and belongs to arbitrary use
+    /// by the caller.
     pub fn tail(&self) -> &[AtomicU64] {
         self.head.tail()
     }
 }
 
-impl ConfigureFile {
-    pub fn or_insert_with(&mut self, replace: impl FnOnce(&mut Self)) {
-        if !self.is_initialized() {
-            replace(self);
-            self.layout_version = ConfigureFile::MAGIC_VERSION;
-        }
-    }
-}
-
-impl core::fmt::Debug for CommitError {
+impl core::fmt::Debug for WriterCommitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CommitError").finish()
+        f.debug_struct("WriterCommitError").finish()
     }
 }
 
-impl core::fmt::Display for CommitError {
+impl core::fmt::Display for WriterCommitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Failed to commit snapshot data")
     }

@@ -1,6 +1,21 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-
+/// Interact with the systemd File Descriptor store (or equivalent).
+///
+/// This crate implements pure Rust wrappers to access a set of environment variables describing
+/// file descriptors pre-opened by the parent process. This is used to pass the kernel state
+/// maintained by a service manager to the service. Commonly, this may be a network socket to avoid
+/// connection loss on restarts, or a shared memory area to retain in-memory state across restarts.
+///
+/// The crate only captures mainly the primary file-descriptor mechanism. Higher level semantics
+/// such as interpreting the contents of a memory file or socket are left to other library
+/// components.
+///
+/// ## Binary Target
+///
+/// The crate also defines a binary target. This program serves as example and can be utilized as a
+/// wrapper binary to bring up the File Descriptor store on a cold restart. It makes sure a shm
+/// file exists as a named file descriptor in the store.
 use core::ffi::c_int as RawFd;
 
 extern crate alloc;
