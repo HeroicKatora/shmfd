@@ -29,6 +29,7 @@ fn main() {
         .expect("failed to initialize LISTEN_FDS env");
 
     let notify_sd = NotifyFd::new()
+        .transpose()
         .expect("failed to open notify socket");
 
     let init = ListenInit::<MemFile>::named_or_try_create::<std::io::Error>(
