@@ -8,3 +8,4 @@ FileDescriptorStorePreserve=yes
 ExecStart="${SHMFD}/target/release/shm-restore" "--snapshot=restore-v1" "${SHMFD}/target/fprimes-snapshot" "${SHMFD}/target/release/primes-snapshot"
 Type=exec
 Restart=on-abnormal
+Environment=RUST_LOG=info

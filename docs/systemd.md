@@ -59,7 +59,7 @@ export SHMFD="$(pwd)"
 [ -f systemd.md ] && export SHMFD="$(realpath ..)"
 
 cargo build --release \
-    -p shm-snapshot --features=shm-restore --bin shm-restore \
+    -p shm-snapshot --features="shm-restore shm-restore-tracing" --bin shm-restore \
     -p primes-snapshot --bin primes-snapshot
 
 envsubst > ~/.config/systemd/user/shmfd-primes-snapshot.service \

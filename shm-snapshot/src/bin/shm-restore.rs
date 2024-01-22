@@ -21,6 +21,18 @@ fn main() {
         args,
     } = RestoreCommand::parse();
 
+    #[cfg(feature = "shm-restore-tracing")]
+    use tracing_subscriber::{
+        layer::SubscriberExt as _,
+        util::SubscriberInitExt as _,
+    };
+
+    #[cfg(feature = "shm-restore-tracing")]
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     // FIXME: allow customization.
     let fd_name = "SHM_SHARED_FD";
 
@@ -283,6 +295,7 @@ fn file_with_parent(file: &OsStr) -> Option<FileWithParent<'_>> {
 }
 
 fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), std::io::Error> {
+    let mut now = std::time::Instant::now();
     let FileWithParent(backup_path, parent) = backup;
     let snapshot = shm_snapshot::File::new(dropped.write_back.shm)?;
 
@@ -292,6 +305,9 @@ fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), s
         recovery.valid(&mut pre_valid);
     }
 
+    let time_to_recover = now.elapsed();
+    now += time_to_recover;
+
     // Detect which portions stayed immutable by collecting the assertions twice. Once before we
     // write the file, and once afterwards. The entries which were active before certify that their
     // data was written before the range copy, the entries which were active afterwards certify
@@ -300,6 +316,9 @@ fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), s
     // Write everything into a temporary file first.
     let pending = tempfile::NamedTempFile::new_in(parent)?;
     (dropped.how)(dropped.write_back.shm, pending.as_raw_fd());
+
+    let time_to_write = now.elapsed();
+    now += time_to_write;
 
     // And now we must mask from the backup file all entries that we can not prove are valid. If
     // there are any remaining entries, this backup was successful.
@@ -315,6 +334,9 @@ fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), s
         recovery.valid(&mut post_valid);
     }
 
+    let time_to_retain = now.elapsed();
+    now += time_to_retain;
+
     if post_valid.is_empty() {
         // No progress was made, no entry successfully persisted.
         return Ok(());
@@ -325,10 +347,25 @@ fn try_restore_v1(dropped: &mut Dropped, backup: FileWithParent) -> Result<(), s
 
     // Success! We now swap out our file handles.
     let pending = pending.persist(backup_path)?;
+
+    let time_to_persist = now.elapsed();
+    now += time_to_persist;
+
     let mut pending_fd = pending.into_raw_fd();
     core::mem::swap(&mut dropped.write_back.bck, &mut pending_fd);
     unsafe { libc::close(pending_fd) };
 
+    let time_to_close = now.elapsed();
+    #[cfg(feature = "shm-restore-tracing")]
+    tracing::info!(
+        time_to_recover = format_args!("{:?}", time_to_recover),
+        time_to_write = format_args!("{:?}", time_to_write),
+        time_to_retain = format_args!("{:?}", time_to_retain),
+        time_to_persist = format_args!("{:?}", time_to_persist),
+        time_to_close = format_args!("{:?}", time_to_close),
+    );
+
+    let _ = time_to_close;
     Ok(())
 }
 
