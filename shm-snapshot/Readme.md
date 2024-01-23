@@ -3,12 +3,12 @@ A memory-region that can be snapshot.
 ## Try out
 
 ```bash
-cargo build --release -p shm-fd \
-    -p shm-snapshot --features=shm-restore --bin shm-restore \
+cargo build --release \
+    -p shm-snapshot --features="shm-restore shm-restore-tracing" --bin shm-restore \
     -p primes-snapshot
 
-./target/release/shm-fd \
-    ./target/release/shm-restore --snapshot=restore-v1 ./target/prime-snapshot \
+RUST_LOG=info ./target/release/shm-restore \
+    --snapshot=restore-v1 ./target/prime-snapshot \
     ./target/release/primes-snapshot
 ```
 
