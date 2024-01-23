@@ -36,12 +36,10 @@ ensures that data is reloaded and persisted at start and end of the process.
 
 ```bash
 cargo build --release \
-    -p shm-fd --bin shm-fd \
     -p shm-snapshot --features=shm-restore --bin shm-restore \
     -p primes-snapshot --bin primes-snapshot
 
-./target/release/shm-fd \
-    ./target/release/shm-restore ./target/prime-snapshot \
+./target/release/shm-restore ./target/prime-snapshot \
     ./target/release/primes-snapshot
 ```
 
