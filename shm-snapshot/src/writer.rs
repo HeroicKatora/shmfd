@@ -181,6 +181,12 @@ impl Head {
         Self::retain_in_head(&alternate_head, retain);
     }
 
+    pub(crate) fn entry_at(&self, idx: super::SnapshotIndex) -> Snapshot {
+        let snapshot = self.head.entry_at_relaxed(idx.entry);
+        core::sync::atomic::fence(Ordering::Acquire);
+        snapshot
+    }
+
     fn valid_in_head(head: &WriteHead, into: &mut impl Extend<Snapshot>) {
         struct Collector<T>(T);
 
@@ -477,26 +483,34 @@ impl WriteHead {
         }
     }
 
-    fn invalidate_at(&mut self, idx: u64) -> u64 {
+    fn get_entry_atomic(&self, idx: u64) -> &SequenceEntry {
         let idx = (idx & self.cache.entry_mask) as usize;
 
         let page = idx / SequencePage::DATA_COUNT;
         let entry = idx % SequencePage::DATA_COUNT;
 
-        let entry = &self.sequence[page].data[entry];
+        &self.sequence[page].data[entry]
+    }
+
+    fn invalidate_at(&mut self, idx: u64) -> u64 {
+        let entry = self.get_entry_atomic(idx);
         entry.length.swap(0, Ordering::Relaxed)
     }
 
     fn insert_at(&mut self, idx: u64, snap: Snapshot) {
-        let idx = (idx & self.cache.entry_mask) as usize;
-
-        let page = idx / SequencePage::DATA_COUNT;
-        let entry = idx % SequencePage::DATA_COUNT;
-
-        let entry = &self.sequence[page].data[entry];
+        let entry = self.get_entry_atomic(idx);
 
         entry.offset.store(snap.offset, Ordering::Release);
         entry.length.store(snap.length, Ordering::Release);
+    }
+
+    fn entry_at_relaxed(&self, idx: u64) -> Snapshot {
+        let entry = self.get_entry_atomic(idx);
+
+        Snapshot {
+            offset: entry.offset.load(Ordering::Relaxed),
+            length: entry.offset.load(Ordering::Relaxed),
+        }
     }
 
     fn idx_at(&self, idx: u64) -> (usize, usize, u32) {

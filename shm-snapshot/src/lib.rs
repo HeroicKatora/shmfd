@@ -163,6 +163,11 @@ impl Writer {
         }
     }
 
+    /// Read the snapshot associated with a written index.
+    pub fn snapshot_at(&self, idx: SnapshotIndex) -> Snapshot {
+        self.head.entry_at(idx)
+    }
+
     /// Read data described by a snapshot, with discovered metadata in the file.
     pub fn read(&self, snapshot: &Snapshot, buffer: &mut [u8]) {
         self.head.read(snapshot, buffer);
