@@ -1,4 +1,4 @@
-use crate::writer::{HeadCache, HeadPage, SequencePage, DataPage, WriteHead};
+use crate::writer::{DataPage, HeadCache, HeadPage, SequencePage, WriteHead};
 use core::sync::atomic::Ordering;
 
 #[test]
@@ -13,7 +13,12 @@ fn initialize_inner_basic() {
         head.configure_pages();
 
         let mut entry = head.entry();
-        entry.copy_from_slice(b"Hello, world!");
+        const DATA: &[u8] = b"Hello, world!";
+        let end_ptr = entry
+            .new_write_offset(DATA.len())
+            .expect("Invalid, can't determine end offset of data");
+        entry.invalidate_heads(end_ptr);
+        entry.copy_from_slice(DATA);
         entry.commit();
 
         head.iter_valid(&mut valids, Ordering::Relaxed);
@@ -40,7 +45,12 @@ fn commit_not() {
         assert_eq!(valids.len(), 0);
 
         let mut entry = head.entry();
-        entry.copy_from_slice(b"Hello, world!");
+        const DATA: &[u8] = b"Hello, world!";
+        let end_ptr = entry
+            .new_write_offset(DATA.len())
+            .expect("Invalid, can't determine end offset of data");
+        entry.invalidate_heads(end_ptr);
+        entry.copy_from_slice(DATA);
         entry.commit();
 
         head.iter_valid(&mut valids, Ordering::Relaxed);

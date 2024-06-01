@@ -1,5 +1,5 @@
-use core::sync::atomic::{AtomicU64, Ordering};
 use core::iter::Extend;
+use core::sync::atomic::{AtomicU64, Ordering};
 use memmap2::MmapRaw;
 
 /// A memory-mapped file into which this writer adds new snapshot.
@@ -192,7 +192,7 @@ impl Head {
 
         impl<T, V> Collect<T> for Collector<&'_ mut V>
         where
-            V: Extend<T>
+            V: Extend<T>,
         {
             fn insert_one(&mut self, val: T) -> bool {
                 self.0.extend(core::iter::once(val));
@@ -330,7 +330,7 @@ impl Head {
             return Err(());
         };
 
-        entry.invalidate_heads_to(end_ptr);
+        entry.invalidate_heads(end_ptr);
         entry.copy_from_slice(data);
 
         if intermediate(PreparedTransaction {
@@ -362,7 +362,10 @@ impl WriteHead {
     }
 
     pub(crate) fn configure_pages(&mut self) {
-        assert_eq!(core::mem::size_of::<DataPage>(), core::mem::size_of::<SequencePage>());
+        assert_eq!(
+            core::mem::size_of::<DataPage>(),
+            core::mem::size_of::<SequencePage>()
+        );
 
         let sequence: usize = (self.cache.entry_mask + 1)
             .try_into()
@@ -384,24 +387,33 @@ impl WriteHead {
         self.data = data;
         self.tail = tail;
 
-        self.meta.entry_mask.store(self.cache.entry_mask, Ordering::Relaxed);
-        self.meta.page_mask.store(self.cache.page_mask, Ordering::Relaxed);
-        self.meta.page_write_offset.store(self.cache.page_write_offset, Ordering::Relaxed);
+        self.meta
+            .entry_mask
+            .store(self.cache.entry_mask, Ordering::Relaxed);
+        self.meta
+            .page_mask
+            .store(self.cache.page_mask, Ordering::Relaxed);
+        self.meta
+            .page_write_offset
+            .store(self.cache.page_write_offset, Ordering::Relaxed);
 
-        self.meta.version.store(ConfigureFile::MAGIC_VERSION, Ordering::Release);
+        self.meta
+            .version
+            .store(ConfigureFile::MAGIC_VERSION, Ordering::Release);
     }
 
     pub(crate) fn entry(&mut self) -> Entry<'_> {
         let index = self.cache.entry_write_offset;
         let offset = self.cache.page_write_offset;
-        Entry { head: self, length: 0, index, offset }
+        Entry {
+            head: self,
+            length: 0,
+            index,
+            offset,
+        }
     }
 
-    pub(crate) fn iter_valid(
-        &self,
-        extend: &mut dyn Collect<Snapshot>,
-        ordering: Ordering,
-    ) {
+    pub(crate) fn iter_valid(&self, extend: &mut dyn Collect<Snapshot>, ordering: Ordering) {
         // Always use the stored one. If we're iterating a pre-loaded file then this is the one
         // stored from the previous run, or zeroed if new. If we're iterating over our current
         // writer then we've previously written it, i.e. the ordering here is always good too, no
@@ -431,7 +443,7 @@ impl WriteHead {
 
     pub(crate) fn new_write_offset(&self, n: usize) -> Option<u64> {
         let len = u64::try_from(n);
-        if let Some(len) = len.ok().filter(|&l| l <= self.cache.entry_mask) {
+        if let Some(len) = len.ok().filter(|&l| l <= self.cache.page_mask) {
             Some(self.cache.page_write_offset.wrapping_add(len))
         } else {
             None
@@ -509,7 +521,7 @@ impl WriteHead {
 
         Snapshot {
             offset: entry.offset.load(Ordering::Relaxed),
-            length: entry.offset.load(Ordering::Relaxed),
+            length: entry.length.load(Ordering::Relaxed),
         }
     }
 
@@ -548,10 +560,24 @@ impl WriteHead {
 impl Entry<'_> {
     /// Consume the entry, putting it into the sequence buffer.
     pub(crate) fn commit(self) -> u64 {
-        self.head.insert_at(self.index, Snapshot {
-            length: self.length,
-            offset: self.offset,
-        });
+        let end = self.head.cache.page_write_offset;
+        self.head
+            .meta
+            .page_write_offset
+            .store(end, Ordering::Relaxed);
+
+        debug_assert!(
+            end.wrapping_sub(self.offset) >= self.length,
+            "Failed to reserve enough space in the data section for the entry, risking corrupted data with following writes"
+        );
+
+        self.head.insert_at(
+            self.index,
+            Snapshot {
+                length: self.length,
+                offset: self.offset,
+            },
+        );
 
         self.index
     }
@@ -560,7 +586,7 @@ impl Entry<'_> {
         self.head.new_write_offset(n)
     }
 
-    pub(crate) fn invalidate_heads_to(&mut self, end: u64) {
+    pub(crate) fn invalidate_heads(&mut self, end: u64) {
         self.head.invalidate_heads_to(end);
     }
 
@@ -571,7 +597,12 @@ impl Entry<'_> {
 
 impl<'lt> PreparedTransaction<'lt> {
     pub fn replace(&mut self, data: &[u8]) {
-        assert!(data.len() as u64 <= self.length, "{} > {}", data.len(), self.length);
+        assert!(
+            data.len() as u64 <= self.length,
+            "{} > {}",
+            data.len(),
+            self.length
+        );
         let mut n = self.offset;
 
         for (&b, idx) in data.iter().zip(n..) {
